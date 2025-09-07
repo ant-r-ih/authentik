@@ -35,9 +35,9 @@ from authentik.sources.saml.models import (
     UserSAMLSourceConnection,
 )
 from authentik.sources.saml.processors.constants import (
-    NS_MAP,
     NS_SAML_ASSERTION,
     NS_SAML_PROTOCOL,
+    NS_SIGNATURE,
     SAML_NAME_ID_FORMAT_EMAIL,
     SAML_NAME_ID_FORMAT_PERSISTENT,
     SAML_NAME_ID_FORMAT_TRANSIENT,
@@ -116,31 +116,19 @@ class ResponseProcessor:
 
     def _verify_signed(self):
         """Verify SAML Response's Signature"""
-        signatures = []
-
-        if self._source.signed_response:
-            signature_nodes = self._root.xpath("/samlp:Response/ds:Signature", namespaces=NS_MAP)
-
-            if len(signature_nodes) != 1:
-                raise InvalidSignature("No Signature exists in the Response element.")
-            signatures.append(signature_nodes)
-
-        if self._source.signed_assertion:
-            signature_nodes = self._root.xpath(
-                "/samlp:Response/saml:Assertion/ds:Signature", namespaces=NS_MAP
-            )
-
-            if len(signature_nodes) != 1:
-                raise InvalidSignature("No Signature exists in the Assertion element.")
-            signatures.append(signature_nodes)
-
-        if len(signatures) == 0:
+        signature_nodes = []
+        signature = self._root.find(f"{{{NS_SIGNATURE}}}Signature")
+        if signature is not None:
+            signature_nodes.append(signature)
+        assertion = self._root.find(f"{{{NS_SAML_ASSERTION}}}Assertion")
+        if assertion is not None:
+            signature = assertion.find(f"{{{NS_SIGNATURE}}}Signature")
+            if signature is not None:
+                signature_nodes.append(signature)
+        if len(signature_nodes) == 0:
             raise InvalidSignature()
-
-        for signature in signatures:
-            signature_node = signature[0]
-            xmlsec.tree.add_ids(self._root, ["ID"])
-
+        xmlsec.tree.add_ids(self._root, ["ID"])
+        for signature_node in signature_nodes:
             ctx = xmlsec.SignatureContext()
             key = xmlsec.Key.from_memory(
                 self._source.verification_kp.certificate_data,
@@ -153,7 +141,7 @@ class ResponseProcessor:
                 ctx.verify(signature_node)
             except xmlsec.Error as exc:
                 raise InvalidSignature() from exc
-            LOGGER.debug("Successfully verified signature")
+        LOGGER.debug("Successfully verified signature")
 
     def _verify_request_id(self):
         if self._source.allow_idp_initiated:

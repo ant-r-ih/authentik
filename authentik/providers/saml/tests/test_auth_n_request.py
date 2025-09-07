@@ -97,7 +97,6 @@ class TestAuthNRequest(TestCase):
             pre_authentication_flow=create_test_flow(),
             signing_kp=self.cert,
             verification_kp=self.cert,
-            signed_assertion=True,
         )
 
     def test_signed_valid(self):
@@ -172,7 +171,6 @@ class TestAuthNRequest(TestCase):
         self.provider.sign_assertion = True
         self.provider.sign_response = True
         self.provider.save()
-        self.source.signed_response = True
         http_request = get_request("/")
 
         # First create an AuthNRequest
