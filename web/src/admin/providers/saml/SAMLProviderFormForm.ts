@@ -34,11 +34,11 @@ const serviceProviderBindingOptions: RadioOption<SAMLBindingsEnum>[] = [
     {
         label: msg("Redirect"),
         value: SAMLBindingsEnum.Redirect,
-        default: true,
     },
     {
         label: msg("Post"),
         value: SAMLBindingsEnum.Post,
+        default: true,
     },
 ];
 

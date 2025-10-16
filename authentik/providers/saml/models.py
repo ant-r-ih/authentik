@@ -72,7 +72,7 @@ class SAMLProvider(Provider):
     issuer = models.TextField(help_text=_("Also known as EntityID"), default="authentik")
     sp_binding = models.TextField(
         choices=SAMLBindings.choices,
-        default=SAMLBindings.REDIRECT,
+        default=SAMLBindings.POST,
         verbose_name=_("Service Provider Binding"),
         help_text=_(
             "This determines how authentik sends the response back to the Service Provider."

@@ -13,8 +13,8 @@ function toOptions<T>(options: Option<T>[]) {
 }
 
 export const spBindingOptions = toOptions([
-    [msg("Redirect"), SAMLBindingsEnum.Redirect, true],
-    [msg("Post"), SAMLBindingsEnum.Post],
+    [msg("Redirect"), SAMLBindingsEnum.Redirect],
+    [msg("Post"), SAMLBindingsEnum.Post, true],
 ]);
 
 export const digestAlgorithmOptions = toOptions([
