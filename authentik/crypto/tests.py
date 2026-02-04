@@ -7,6 +7,8 @@ from tempfile import TemporaryDirectory
 
 from cryptography.x509.extensions import SubjectAlternativeName
 from cryptography.x509.general_name import DNSName
+from django.conf import settings
+from django.test import override_settings
 from django.urls import reverse
 from django.utils.timezone import now
 from rest_framework.test import APITestCase
@@ -20,13 +22,18 @@ from authentik.core.tests.utils import (
 )
 from authentik.crypto.api import CertificateKeyPairSerializer
 from authentik.crypto.builder import CertificateBuilder
-from authentik.crypto.models import CertificateKeyPair
+from authentik.crypto.models import CertificateKeyPair, CertificateReference
 from authentik.crypto.tasks import MANAGED_DISCOVERED, certificate_discovery
 from authentik.lib.config import CONFIG
 from authentik.lib.generators import generate_id, generate_key
 from authentik.providers.oauth2.models import OAuth2Provider, RedirectURI, RedirectURIMatchingMode
 
+MIDDLEWARE_NO_ENTERPRISE_AUDIT = [
+    m for m in settings.MIDDLEWARE
+    if m != "authentik.enterprise.audit.middleware.EnterpriseAuditMiddleware"
+]
 
+@override_settings(MIDDLEWARE=MIDDLEWARE_NO_ENTERPRISE_AUDIT)
 class TestCrypto(APITestCase):
     """Test Crypto validation"""
 
@@ -426,3 +433,65 @@ class TestCrypto(APITestCase):
             self.assertEqual(
                 1, final_count, "Should not create duplicate cert for same private key"
             )
+
+    def test_certificate_reference_create(self):
+        keypair: CertificateKeyPair = create_test_cert()
+        provider = OAuth2Provider.objects.create(
+            name=generate_id(),
+            client_id=generate_id(),
+            client_secret=generate_key(),
+            authorization_flow=create_test_flow(),
+            redirect_uris=[RedirectURI(RedirectURIMatchingMode.STRICT, "http://localhost")],
+            signing_key=keypair,
+        )
+
+        ref = CertificateReference.objects.create(
+            certificate=keypair,
+            ref_model="authentik_providers_oauth2.OAuth2Provider",
+            ref_pk=str(provider.pk),
+            usage=CertificateReference.Usage.SAML_SIGNING,
+        )
+
+        self.assertEqual(ref.certificate_id, keypair.pk)
+        self.assertEqual(ref.ref_model, "authentik_providers_oauth2.OAuth2Provider")
+        self.assertEqual(ref.ref_pk, str(provider.pk))
+        self.assertEqual(ref.usage, CertificateReference.Usage.SAML_SIGNING)
+
+    def test_used_by_includes_certificate_reference(self):
+        """used_by endpoint includes generic CertificateReference entries (regression test)."""
+        self.client.force_login(create_test_admin_user())
+
+        keypair: CertificateKeyPair = create_test_cert()
+        provider = OAuth2Provider.objects.create(
+            name=generate_id(),
+            client_id=generate_id(),
+            client_secret=generate_key(),
+            authorization_flow=create_test_flow(),
+            redirect_uris=[RedirectURI(RedirectURIMatchingMode.STRICT, "http://localhost")],
+            signing_key=keypair,
+        )
+
+        # Create a generic reference entry (new behavior we want to keep stable)
+        CertificateReference.objects.create(
+            certificate=keypair,
+            ref_model="authentik_providers_oauth2.OAuth2Provider",
+            ref_pk=str(provider.pk),
+            usage=CertificateReference.Usage.SAML_SIGNING,  # enumの値なら何でもOK
+        )
+
+        response = self.client.get(
+            reverse(
+                "authentik_api:certificatekeypair-used-by",
+                kwargs={"pk": keypair.pk},
+            )
+        )
+        self.assertEqual(200, response.status_code)
+
+        data = response.json()
+        self.assertIsInstance(data, list)
+
+        # Don't assert full payload; only ensure the provider is present somewhere.
+        self.assertTrue(
+            any(item.get("pk") == str(provider.pk) for item in data),
+            f"Expected provider {provider.pk} to appear in used_by response: {data}",
+        )

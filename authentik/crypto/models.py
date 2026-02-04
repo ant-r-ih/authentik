@@ -151,3 +151,44 @@ class CertificateKeyPair(SerializerModel, ManagedModel, CreatedUpdatedModel):
             ("view_certificatekeypair_certificate", _("View Certificate-Key pair's certificate")),
             ("view_certificatekeypair_key", _("View Certificate-Key pair's private key")),
         ]
+
+class CertificateReference(CreatedUpdatedModel):
+    """Generic reference from any object to a CertificateKeyPair.
+
+    Used to prevent accidental deletion and to show where a cert/key is used.
+    """
+
+    class Usage(models.TextChoices):
+        # Keep this minimal at first; you can extend later.
+        SAML_SIGNING = "saml.signing", _("SAML signing")
+        SAML_ENCRYPTION = "saml.encryption", _("SAML encryption")
+        SAML_VERIFICATION = "saml.verification", _("SAML verification")
+
+    certificate = models.ForeignKey(
+        CertificateKeyPair,
+        on_delete=models.CASCADE,
+        related_name="references",
+    )
+
+    # Generic “who references this cert”
+    ref_model = models.CharField(max_length=200)  # e.g. "authentik_providers_saml.SAMLProvider"
+    ref_pk = models.CharField(max_length=64)      # UUID/Text/Int as string
+    usage = models.CharField(max_length=64, choices=Usage.choices)
+
+    class Meta:
+        verbose_name = _("Certificate reference")
+        verbose_name_plural = _("Certificate references")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["certificate", "ref_model", "ref_pk", "usage"],
+                name="uniq_certificate_reference",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["certificate"]),
+            models.Index(fields=["ref_model", "ref_pk"]),
+            models.Index(fields=["usage"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.usage}: {self.ref_model}:{self.ref_pk} -> {self.certificate_id}"
