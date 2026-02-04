@@ -9,6 +9,7 @@ from rest_framework.test import APITestCase
 from authentik.blueprints.tests import apply_blueprint
 from authentik.core.models import Application
 from authentik.core.tests.utils import create_test_admin_user, create_test_cert, create_test_flow
+from authentik.crypto.models import CertificateReference
 from authentik.flows.models import FlowDesignation
 from authentik.lib.generators import generate_id
 from authentik.lib.tests.utils import load_fixture
@@ -22,6 +23,19 @@ class TestSAMLProviderAPI(APITestCase):
         super().setUp()
         self.user = create_test_admin_user()
         self.client.force_login(self.user)
+
+    def _assert_cert_ref_exists(self, cert, provider: SAMLProvider, usage: str, *, count: int = 1):
+        qs = CertificateReference.objects.filter(
+            certificate=cert,
+            ref_model="authentik_providers_saml.SAMLProvider",
+            ref_pk=str(provider.pk),
+            usage=usage,
+        )
+        self.assertEqual(
+            qs.count(),
+            count,
+            msg=f"Expected {count} CertificateReference for usage={usage}, got {qs.count()}",
+        )
 
     def test_detail(self):
         """Test detail"""
@@ -215,3 +229,75 @@ class TestSAMLProviderAPI(APITestCase):
             ]["Value"],
             [self.user.username],
         )
+    def test_provider_create_and_update_creates_references(self):
+        """Create+Update should create/update CertificateReference rows for selected keypairs."""
+
+        cert1 = create_test_cert()
+        cert2 = create_test_cert()
+
+        # --- Create Provider with three cert relations set
+        create_resp = self.client.post(
+            reverse("authentik_api:samlprovider-list"),
+            data={
+                "name": generate_id(),
+                "authorization_flow": create_test_flow().pk,
+                "invalidation_flow": create_test_flow().pk,
+                "acs_url": "http://localhost",
+                # signing requires at least one of sign_assertion/sign_response
+                "sign_assertion": True,
+                "sign_response": False,
+                "sign_logout_request": False,
+                "signing_kp": str(cert1.pk),
+                "verification_kp": str(cert1.pk),
+                "encryption_kp": str(cert1.pk),
+            },
+        )
+        self.assertEqual(create_resp.status_code, 201, create_resp.content)
+        provider_pk = create_resp.json()["pk"]
+        provider = SAMLProvider.objects.get(pk=provider_pk)
+
+        # references created on create
+        self._assert_cert_ref_exists(cert1, provider, "saml.signing")
+        self._assert_cert_ref_exists(cert1, provider, "saml.verification")
+        self._assert_cert_ref_exists(cert1, provider, "saml.encryption")
+
+        # --- Patch: rotate all three to cert2
+        patch_resp = self.client.patch(
+            reverse("authentik_api:samlprovider-detail", kwargs={"pk": provider.pk}),
+            data={
+                "signing_kp": str(cert2.pk),
+                "verification_kp": str(cert2.pk),
+                "encryption_kp": str(cert2.pk),
+                # keep signing flags valid
+                "sign_assertion": True,
+            },
+            format="json",
+        )
+        self.assertEqual(patch_resp.status_code, 200, patch_resp.content)
+        provider.refresh_from_db()
+
+        # old refs removed (or at least no longer present)
+        self._assert_cert_ref_exists(cert1, provider, "saml.signing", count=0)
+        self._assert_cert_ref_exists(cert1, provider, "saml.verification", count=0)
+        self._assert_cert_ref_exists(cert1, provider, "saml.encryption", count=0)
+
+        # new refs created
+        self._assert_cert_ref_exists(cert2, provider, "saml.signing")
+        self._assert_cert_ref_exists(cert2, provider, "saml.verification")
+        self._assert_cert_ref_exists(cert2, provider, "saml.encryption")
+
+        # --- Patch: unset one field -> reference removed
+        patch_resp2 = self.client.patch(
+            reverse("authentik_api:samlprovider-detail", kwargs={"pk": provider.pk}),
+            data={
+                "verification_kp": None,
+            },
+            format="json",
+        )
+        self.assertEqual(patch_resp2.status_code, 200, patch_resp2.content)
+        provider.refresh_from_db()
+
+        self._assert_cert_ref_exists(cert2, provider, "saml.verification", count=0)
+        # other refs remain
+        self._assert_cert_ref_exists(cert2, provider, "saml.signing", count=1)
+        self._assert_cert_ref_exists(cert2, provider, "saml.encryption", count=1)

@@ -28,6 +28,7 @@ from authentik.core.api.providers import ProviderSerializer
 from authentik.core.api.used_by import UsedByMixin
 from authentik.core.api.utils import PassiveSerializer, PropertyMappingPreviewSerializer
 from authentik.core.models import Provider
+from authentik.crypto.models import CertificateKeyPair, CertificateReference
 from authentik.flows.models import Flow, FlowDesignation
 from authentik.providers.saml.models import SAMLLogoutMethods, SAMLProvider
 from authentik.providers.saml.processors.assertion import AssertionProcessor
@@ -60,6 +61,16 @@ class SAMLProviderSerializer(ProviderSerializer):
     url_sso_init = SerializerMethodField()
     url_slo_post = SerializerMethodField()
     url_slo_redirect = SerializerMethodField()
+
+    def create(self, validated_data):
+        instance: SAMLProvider = super().create(validated_data)
+        sync_saml_provider_cert_refs(instance)
+        return instance
+
+    def update(self, instance, validated_data):
+        instance: SAMLProvider = super().update(instance, validated_data)
+        sync_saml_provider_cert_refs(instance)
+        return instance
 
     def get_url_download_metadata(self, instance: SAMLProvider) -> str:
         """Get metadata download URL"""
@@ -335,6 +346,7 @@ class SAMLProviderViewSet(UsedByMixin, ModelViewSet):
                 body.validated_data["authorization_flow"],
                 body.validated_data["invalidation_flow"],
             )
+            sync_saml_provider_cert_refs(provider)
             # Return the created provider for use in workflows like the application wizard
             return Response(SAMLProviderSerializer(provider).data, status=201)
         except ValueError as exc:  # pragma: no cover
@@ -393,3 +405,50 @@ class SAMLProviderViewSet(UsedByMixin, ModelViewSet):
             instance={"preview": {"attributes": data, "nameID": name_id.text}}
         )
         return Response(serializer.data)
+
+
+
+REF_MODEL_SAML_PROVIDER = "authentik_providers_saml.SAMLProvider"
+
+def sync_saml_provider_cert_refs(provider: SAMLProvider) -> None:
+    """Ensure CertificateReference rows reflect provider.{signing,verification,encryption}_kp."""
+    desired: set[tuple[str, str]] = set()
+    if provider.signing_kp_id:
+        desired.add((str(provider.signing_kp_id), CertificateReference.Usage.SAML_SIGNING))
+    if provider.encryption_kp_id:
+        desired.add((str(provider.encryption_kp_id), CertificateReference.Usage.SAML_ENCRYPTION))
+    if provider.verification_kp_id:
+        desired.add((str(provider.verification_kp_id), CertificateReference.Usage.SAML_VERIFICATION))
+
+    # 現在の参照（この provider 分だけ）
+    existing = CertificateReference.objects.filter(
+        ref_model=REF_MODEL_SAML_PROVIDER,
+        ref_pk=str(provider.pk),
+    )
+
+    existing_set = set(
+        existing.values_list("certificate_id", "usage")
+    )
+
+    to_add = desired - existing_set
+    to_del = existing_set - desired
+
+    if to_del:
+        # certificate_id は UUID なので str に揃えるなら注意。
+        # values_list で取ると UUID のままなので、そのままフィルタする方が安全。
+        for cert_id, usage in to_del:
+            existing.filter(certificate_id=cert_id, usage=usage).delete()
+
+    if to_add:
+        CertificateReference.objects.bulk_create(
+            [
+                CertificateReference(
+                    certificate_id=cert_id,
+                    ref_model=REF_MODEL_SAML_PROVIDER,
+                    ref_pk=str(provider.pk),
+                    usage=usage,
+                )
+                for cert_id, usage in to_add
+            ],
+            ignore_conflicts=True,  # UniqueConstraint があるなら保険
+        )
