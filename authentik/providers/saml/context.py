@@ -13,11 +13,14 @@ class SAMLContext:
 
     Holds resolved SP (or any other per-request derived info) without mutating Django models.
     """
+
     provider: SAMLProvider
     sp: object | None = None  # later: "SAMLSP | None"
     issuer: str | None = None
 
+
 CURRENT_SAML_CTX: ContextVar[SAMLContext | None] = ContextVar("CURRENT_SAML_CTX", default=None)
+
 
 def set_saml_ctx(ctx: SAMLContext):
     """Set current SAML context. Returns token for reset()."""

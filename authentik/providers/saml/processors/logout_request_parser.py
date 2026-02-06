@@ -5,8 +5,14 @@ from dataclasses import dataclass
 
 from defusedxml import ElementTree
 
+from authentik.providers.saml.context import (
+    CURRENT_SAML_CTX,
+    SAMLContext,
+    reset_saml_ctx,
+    set_saml_ctx,
+)
 from authentik.providers.saml.exceptions import CannotHandleAssertion
-from authentik.providers.saml.models import SAMLProvider
+from authentik.providers.saml.models import SAMLProvider, peek_issuer
 from authentik.providers.saml.processors.authn_request_parser import ERROR_CANNOT_DECODE_REQUEST
 from authentik.providers.saml.utils.encoding import decode_base64_and_inflate
 from authentik.sources.saml.processors.constants import NS_SAML_ASSERTION, NS_SAML_PROTOCOL
@@ -28,6 +34,8 @@ class LogoutRequest:
 
     relay_state: str | None = None
 
+    samlsp_pk: str | None = None
+
 
 class LogoutRequestParser:
     """LogoutRequest Parser"""
@@ -42,12 +50,13 @@ class LogoutRequestParser:
         request = LogoutRequest(
             id=root.attrib["ID"],
         )
-        # Try both namespaces for Issuer
-        issuers = root.findall(f"{{{NS_SAML_PROTOCOL}}}Issuer")
-        if not issuers:
-            issuers = root.findall(f"{{{NS_SAML_ASSERTION}}}Issuer")
-        if len(issuers) > 0:
-            request.issuer = issuers[0].text
+        ctx = CURRENT_SAML_CTX.get()
+        if ctx:
+            request.issuer = ctx.issuer
+            if ctx.sp:
+                request.samlsp_pk = str(ctx.sp.pk)
+        else:
+            request.issuer = peek_issuer(root)
 
         # Extract NameID
         name_ids = root.findall(f"{{{NS_SAML_ASSERTION}}}NameID")
@@ -75,7 +84,16 @@ class LogoutRequestParser:
             decoded_xml = b64decode(saml_request.encode())
         except UnicodeDecodeError:
             raise CannotHandleAssertion(ERROR_CANNOT_DECODE_REQUEST) from None
-        return self._parse_xml(decoded_xml, relay_state)
+
+        root = ElementTree.fromstring(decoded_xml)
+        issuer = peek_issuer(root)
+        sp = self.provider.get_sp(issuer)
+
+        token = set_saml_ctx(SAMLContext(provider=self.provider, sp=sp, issuer=issuer))
+        try:
+            return self._parse_xml(decoded_xml, relay_state)
+        finally:
+            reset_saml_ctx(token)
 
     def parse_detached(
         self,
@@ -88,4 +106,12 @@ class LogoutRequestParser:
         except UnicodeDecodeError:
             raise CannotHandleAssertion(ERROR_CANNOT_DECODE_REQUEST) from None
 
-        return self._parse_xml(decoded_xml, relay_state)
+        root = ElementTree.fromstring(decoded_xml)
+        issuer = peek_issuer(root)
+        sp = self.provider.get_sp(issuer)
+
+        token = set_saml_ctx(SAMLContext(provider=self.provider, sp=sp, issuer=issuer))
+        try:
+            return self._parse_xml(decoded_xml, relay_state)
+        finally:
+            reset_saml_ctx(token)

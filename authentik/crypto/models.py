@@ -26,6 +26,9 @@ from authentik.lib.models import CreatedUpdatedModel, SerializerModel
 
 LOGGER = get_logger()
 
+REF_MODEL_SAML_PROVIDER = "authentik.providers.saml.SAMLProvider"
+REF_MODEL_SAML_SP = "authentik.providers.saml.SAMLSP"
+
 
 def format_cert(raw_pam: str) -> str:
     """Format a PEM certificate that is either missing its header/footer or is in a single line"""
@@ -152,14 +155,16 @@ class CertificateKeyPair(SerializerModel, ManagedModel, CreatedUpdatedModel):
             ("view_certificatekeypair_key", _("View Certificate-Key pair's private key")),
         ]
 
+
 class CertificateReference(CreatedUpdatedModel):
     """Generic reference from any object to a CertificateKeyPair.
 
     Used to prevent accidental deletion and to show where a cert/key is used.
+    Additionally caches the certificate fingerprint (SHA-256) for fast lookups/dedup.
     """
 
     class Usage(models.TextChoices):
-        # Keep this minimal at first; you can extend later.
+        # Keep this minimal at first; extend later if needed.
         SAML_SIGNING = "saml.signing", _("SAML signing")
         SAML_ENCRYPTION = "saml.encryption", _("SAML encryption")
         SAML_VERIFICATION = "saml.verification", _("SAML verification")
@@ -170,9 +175,25 @@ class CertificateReference(CreatedUpdatedModel):
         related_name="references",
     )
 
+    # Cached fingerprint for the referenced certificate (SHA-256 over DER), hex encoded.
+    # 32 bytes -> 64 hex chars.
+    fingerprint_sha256 = models.CharField(
+        max_length=64,
+        editable=False,
+        help_text=_("SHA-256 fingerprint of the referenced certificate (hex)."),
+    )
+
     # Generic “who references this cert”
-    ref_model = models.CharField(max_length=200)  # e.g. "authentik_providers_saml.SAMLProvider"
-    ref_pk = models.CharField(max_length=64)      # UUID/Text/Int as string
+    ref_model = models.CharField(
+        max_length=200,
+        help_text=_(
+            'Model label of the referencing object, e.g. "authentik_providers_saml.SAMLProvider".'
+        ),
+    )
+    ref_pk = models.CharField(
+        max_length=64,
+        help_text=_("Primary key of the referencing object serialized as string."),
+    )
     usage = models.CharField(max_length=64, choices=Usage.choices)
 
     class Meta:
@@ -188,6 +209,7 @@ class CertificateReference(CreatedUpdatedModel):
             models.Index(fields=["certificate"]),
             models.Index(fields=["ref_model", "ref_pk"]),
             models.Index(fields=["usage"]),
+            models.Index(fields=["fingerprint_sha256"]),
         ]
 
     def __str__(self) -> str:

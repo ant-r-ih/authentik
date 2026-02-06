@@ -230,9 +230,13 @@ class SAMLProvider(Provider):
     sign_assertion = models.BooleanField(default=True)
     sign_response = models.BooleanField(default=False)
     sign_logout_request = models.BooleanField(default=False)
-    strict_acs_url = models.BooleanField(default=True, help_text=_(
-        "When disabled, the ACS URL from the SAML request is used instead of the provider's configured ACS URL."
-    ))
+    strict_acs_url = models.BooleanField(
+        default=True,
+        help_text=_(
+            "When disabled, the ACS URL from the SAML request is used"
+            "instead of the provider's configured ACS URL."
+        ),
+    )
 
     @property
     def launch_url(self) -> str | None:
@@ -272,82 +276,6 @@ class SAMLProvider(Provider):
         verbose_name_plural = _("SAML Providers")
 
 
-class SAMLPropertyMapping(PropertyMapping):
-    """Map User/Group attribute to SAML Attribute, which can be used by the Service Provider"""
-
-    saml_name = models.TextField(verbose_name="SAML Name")
-    friendly_name = models.TextField(default=None, blank=True, null=True)
-
-    @property
-    def component(self) -> str:
-        return "ak-property-mapping-provider-saml-form"
-
-    @property
-    def serializer(self) -> type[Serializer]:
-        from authentik.providers.saml.api.property_mappings import SAMLPropertyMappingSerializer
-
-        return SAMLPropertyMappingSerializer
-
-    def __str__(self):
-        name = self.friendly_name if self.friendly_name != "" else self.saml_name
-        return f"{self.name} ({name})"
-
-    class Meta:
-        verbose_name = _("SAML Provider Property Mapping")
-        verbose_name_plural = _("SAML Provider Property Mappings")
-
-
-class SAMLProviderImportModel(CreatableType, Provider):
-    """Create a SAML Provider by importing its Metadata."""
-
-    @property
-    def component(self):
-        return "ak-provider-saml-import-form"
-
-    @property
-    def icon_url(self) -> str | None:
-        return static("authentik/sources/saml.png")
-
-    class Meta:
-        abstract = True
-        verbose_name = _("SAML Provider from Metadata")
-        verbose_name_plural = _("SAML Providers from Metadata")
-
-
-class SAMLSession(SerializerModel, ExpiringModel):
-    """Track active SAML sessions for Single Logout support"""
-
-    saml_session_id = models.UUIDField(default=uuid4, primary_key=True)
-    provider = models.ForeignKey(SAMLProvider, on_delete=models.CASCADE)
-    user = models.ForeignKey(User, verbose_name=_("User"), on_delete=models.CASCADE)
-    session = models.ForeignKey(
-        AuthenticatedSession,
-        on_delete=models.CASCADE,
-        help_text=_("Link to the user's authenticated session"),
-    )
-    session_index = models.TextField(help_text=_("SAML SessionIndex for this session"))
-    name_id = models.TextField(help_text=_("SAML NameID value for this session"))
-    name_id_format = models.TextField(default="", blank=True, help_text=_("SAML NameID format"))
-    created = models.DateTimeField(auto_now_add=True)
-
-    @property
-    def serializer(self) -> type[Serializer]:
-        from authentik.providers.saml.api.sessions import SAMLSessionSerializer
-
-        return SAMLSessionSerializer
-
-    def __str__(self):
-        return f"SAML Session for provider {self.provider_id} and user {self.user_id}"
-
-    class Meta:
-        verbose_name = _("SAML Session")
-        verbose_name_plural = _("SAML Sessions")
-        unique_together = [("session_index", "provider")]
-        indexes = [
-            models.Index(fields=["session_index"]),
-            models.Index(fields=["provider", "user"]),
-            models.Index(fields=["session"]),
-        ]
 class SAMLSP(models.Model):
     """Service Provider entry derived from uploaded SP metadata.
 
@@ -438,6 +366,92 @@ class SAMLSP(models.Model):
 
     def __str__(self) -> str:
         return self.name or self.entity_id
+
+
+class SAMLPropertyMapping(PropertyMapping):
+    """Map User/Group attribute to SAML Attribute, which can be used by the Service Provider"""
+
+    saml_name = models.TextField(verbose_name="SAML Name")
+    friendly_name = models.TextField(default=None, blank=True, null=True)
+
+    @property
+    def component(self) -> str:
+        return "ak-property-mapping-provider-saml-form"
+
+    @property
+    def serializer(self) -> type[Serializer]:
+        from authentik.providers.saml.api.property_mappings import SAMLPropertyMappingSerializer
+
+        return SAMLPropertyMappingSerializer
+
+    def __str__(self):
+        name = self.friendly_name if self.friendly_name != "" else self.saml_name
+        return f"{self.name} ({name})"
+
+    class Meta:
+        verbose_name = _("SAML Provider Property Mapping")
+        verbose_name_plural = _("SAML Provider Property Mappings")
+
+
+class SAMLProviderImportModel(CreatableType, Provider):
+    """Create a SAML Provider by importing its Metadata."""
+
+    @property
+    def component(self):
+        return "ak-provider-saml-import-form"
+
+    @property
+    def icon_url(self) -> str | None:
+        return static("authentik/sources/saml.png")
+
+    class Meta:
+        abstract = True
+        verbose_name = _("SAML Provider from Metadata")
+        verbose_name_plural = _("SAML Providers from Metadata")
+
+
+class SAMLSession(SerializerModel, ExpiringModel):
+    """Track active SAML sessions for Single Logout support"""
+
+    saml_session_id = models.UUIDField(default=uuid4, primary_key=True)
+    provider = models.ForeignKey(SAMLProvider, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, verbose_name=_("User"), on_delete=models.CASCADE)
+    session = models.ForeignKey(
+        AuthenticatedSession,
+        on_delete=models.CASCADE,
+        help_text=_("Link to the user's authenticated session"),
+    )
+    session_index = models.TextField(help_text=_("SAML SessionIndex for this session"))
+    name_id = models.TextField(help_text=_("SAML NameID value for this session"))
+    name_id_format = models.TextField(default="", blank=True, help_text=_("SAML NameID format"))
+    created = models.DateTimeField(auto_now_add=True)
+    samlsp = models.ForeignKey(
+        "authentik_providers_saml.SAMLSP",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="sessions",
+    )
+
+    @property
+    def serializer(self) -> type[Serializer]:
+        from authentik.providers.saml.api.sessions import SAMLSessionSerializer
+
+        return SAMLSessionSerializer
+
+    def __str__(self):
+        return f"SAML Session for provider {self.provider_id} and user {self.user_id}"
+
+    class Meta:
+        verbose_name = _("SAML Session")
+        verbose_name_plural = _("SAML Sessions")
+        unique_together = [("session_index", "provider")]
+        indexes = [
+            models.Index(fields=["session_index"]),
+            models.Index(fields=["provider", "user"]),
+            models.Index(fields=["session"]),
+        ]
+
 
 def peek_issuer(root: ElementTree) -> str | None:
     issuers = root.findall(f"{{{NS_SAML_PROTOCOL}}}Issuer")

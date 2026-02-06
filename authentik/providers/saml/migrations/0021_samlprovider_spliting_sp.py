@@ -166,4 +166,19 @@ class Migration(migrations.Migration):
                 name="samlsp_entity_id_idx",
             ),
         ),
+        migrations.AddField(
+            model_name="SAMLSession",
+            name="samlsp",
+            field=models.ForeignKey(
+                to="authentik_providers_saml.samlsp",
+                null=True,
+                blank=True,
+                on_delete=models.deletion.SET_NULL,
+                related_name="sessions",
+            ),
+        ),
+        migrations.AddIndex(
+            model_name="SAMLSession",
+            index=models.Index(fields=["samlsp"], name="samlsess_samlsp_idx"),
+        ),
     ]

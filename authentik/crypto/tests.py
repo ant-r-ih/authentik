@@ -29,9 +29,11 @@ from authentik.lib.generators import generate_id, generate_key
 from authentik.providers.oauth2.models import OAuth2Provider, RedirectURI, RedirectURIMatchingMode
 
 MIDDLEWARE_NO_ENTERPRISE_AUDIT = [
-    m for m in settings.MIDDLEWARE
+    m
+    for m in settings.MIDDLEWARE
     if m != "authentik.enterprise.audit.middleware.EnterpriseAuditMiddleware"
 ]
+
 
 @override_settings(MIDDLEWARE=MIDDLEWARE_NO_ENTERPRISE_AUDIT)
 class TestCrypto(APITestCase):
@@ -447,6 +449,7 @@ class TestCrypto(APITestCase):
 
         ref = CertificateReference.objects.create(
             certificate=keypair,
+            fingerprint_sha256=keypair.fingerprint_sha256,
             ref_model="authentik_providers_oauth2.OAuth2Provider",
             ref_pk=str(provider.pk),
             usage=CertificateReference.Usage.SAML_SIGNING,
@@ -474,6 +477,7 @@ class TestCrypto(APITestCase):
         # Create a generic reference entry (new behavior we want to keep stable)
         CertificateReference.objects.create(
             certificate=keypair,
+            fingerprint_sha256=keypair.fingerprint_sha256,
             ref_model="authentik_providers_oauth2.OAuth2Provider",
             ref_pk=str(provider.pk),
             usage=CertificateReference.Usage.SAML_SIGNING,  # enumの値なら何でもOK

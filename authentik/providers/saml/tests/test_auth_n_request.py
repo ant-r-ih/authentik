@@ -88,12 +88,13 @@ class TestAuthNRequest(TestCase):
     @apply_blueprint("system/providers-saml.yaml")
     def setUp(self):
         self.request_factory = RequestFactory()
-        self.cert = create_test_cert()
+        self.cert_idp = create_test_cert()
+        self.cert_sp = create_test_cert()
         self.provider: SAMLProvider = SAMLProvider.objects.create(
             authorization_flow=create_test_flow(),
             acs_url="http://testserver/source/saml/provider/acs/",
-            signing_kp=self.cert,
-            verification_kp=self.cert,
+            signing_kp=self.cert_sp,
+            verification_kp=self.cert_idp,
         )
         self.provider.property_mappings.set(SAMLPropertyMapping.objects.all())
         self.provider.save()
@@ -101,8 +102,8 @@ class TestAuthNRequest(TestCase):
             slug="provider",
             issuer="authentik",
             pre_authentication_flow=create_test_flow(),
-            signing_kp=self.cert,
-            verification_kp=self.cert,
+            signing_kp=self.cert_idp,
+            verification_kp=self.cert_sp,
             signed_assertion=True,
         )
 
@@ -125,9 +126,9 @@ class TestAuthNRequest(TestCase):
 
     def test_request_encrypt(self):
         """Test full SAML Request/Response flow, fully encrypted"""
-        self.provider.encryption_kp = self.cert
+        self.provider.encryption_kp = self.cert_idp
         self.provider.save()
-        self.source.encryption_kp = self.cert
+        self.source.encryption_kp = self.cert_idp
         self.source.save()
         http_request = self.request_factory.get("/", user=get_anonymous_user())
 
