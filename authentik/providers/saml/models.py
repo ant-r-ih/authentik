@@ -2,6 +2,7 @@
 
 from uuid import uuid4
 
+from defusedxml import ElementTree
 from django.db import models
 from django.templatetags.static import static
 from django.urls import reverse
@@ -27,6 +28,8 @@ from authentik.sources.saml.processors.constants import (
     ECDSA_SHA256,
     ECDSA_SHA384,
     ECDSA_SHA512,
+    NS_SAML_ASSERTION,
+    NS_SAML_PROTOCOL,
     RSA_SHA1,
     RSA_SHA256,
     RSA_SHA384,
@@ -227,6 +230,9 @@ class SAMLProvider(Provider):
     sign_assertion = models.BooleanField(default=True)
     sign_response = models.BooleanField(default=False)
     sign_logout_request = models.BooleanField(default=False)
+    strict_acs_url = models.BooleanField(default=True, help_text=_(
+        "When disabled, the ACS URL from the SAML request is used instead of the provider's configured ACS URL."
+    ))
 
     @property
     def launch_url(self) -> str | None:
@@ -252,6 +258,11 @@ class SAMLProvider(Provider):
     @property
     def component(self) -> str:
         return "ak-provider-saml-form"
+
+    def get_sp(self, entity_id: str | None) -> "SAMLSP | None":
+        if not entity_id:
+            return None
+        return self.service_providers.filter(entity_id=entity_id, enabled=True).first()
 
     def __str__(self):
         return f"SAML Provider {self.name}"
@@ -337,3 +348,99 @@ class SAMLSession(SerializerModel, ExpiringModel):
             models.Index(fields=["provider", "user"]),
             models.Index(fields=["session"]),
         ]
+class SAMLSP(models.Model):
+    """Service Provider entry derived from uploaded SP metadata.
+
+    Not a Provider. Represents a remote SP.
+    """
+
+    uuid = models.UUIDField(default=uuid4, editable=False, unique=True)
+
+    provider = models.ForeignKey(
+        "SAMLProvider",
+        on_delete=models.CASCADE,
+        related_name="service_providers",
+        verbose_name=_("SAML Provider"),
+    )
+
+    name = models.TextField(
+        default="",
+        blank=True,
+        help_text=_("Optional display name for this Service Provider entry."),
+    )
+
+    entity_id = models.TextField(
+        help_text=_("Service Provider EntityID (Issuer in AuthnRequest)."),
+    )
+
+    enabled = models.BooleanField(
+        default=False,
+        help_text=_("If enabled, this SP can be selected during request processing."),
+    )
+
+    acs_url = models.TextField(
+        validators=[DomainlessURLValidator(schemes=("http", "https"))],
+        help_text=_("Assertion Consumer Service URL (metadata-derived)."),
+    )
+    sp_binding = models.TextField(
+        choices=SAMLBindings.choices,
+        default=SAMLBindings.REDIRECT,
+        help_text=_("Preferred binding for ACS."),
+    )
+
+    sls_url = models.TextField(
+        blank=True,
+        default="",
+        validators=[DomainlessURLValidator(schemes=("http", "https"))],
+        help_text=_("Single Logout Service URL (metadata-derived)."),
+    )
+    sls_binding = models.TextField(
+        choices=SAMLBindings.choices,
+        default=SAMLBindings.REDIRECT,
+        help_text=_("Preferred binding for SLS."),
+    )
+
+    authn_requests_signed = models.BooleanField(default=False)
+    want_assertions_signed = models.BooleanField(default=False)
+
+    name_id_policy = models.TextField(
+        choices=SAMLNameIDPolicy.choices,
+        default=SAMLNameIDPolicy.UNSPECIFIED,
+    )
+
+    verification_kp = models.ForeignKey(
+        CertificateKeyPair,
+        default=None,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        help_text=_("SP request signature verification certificate (metadata-derived)."),
+    )
+
+    created = models.DateTimeField(auto_now_add=True)
+    last_updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("SAML Service Provider")
+        verbose_name_plural = _("SAML Service Providers")
+        ordering = ["provider", "name", "entity_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "entity_id"],
+                name="uniq_samlsp_provider_entity_id",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["provider", "enabled"]),
+            models.Index(fields=["entity_id"]),
+        ]
+
+    def __str__(self) -> str:
+        return self.name or self.entity_id
+
+def peek_issuer(root: ElementTree) -> str | None:
+    issuers = root.findall(f"{{{NS_SAML_PROTOCOL}}}Issuer")
+    if not issuers:
+        issuers = root.findall(f"{{{NS_SAML_ASSERTION}}}Issuer")
+    return issuers[0].text if issuers else None

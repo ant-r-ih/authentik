@@ -10,8 +10,10 @@ from defusedxml import ElementTree
 from structlog.stdlib import get_logger
 
 from authentik.lib.xml import lxml_from_string
+from authentik.providers.saml.context import SAMLContext, reset_saml_ctx, set_saml_ctx
 from authentik.providers.saml.exceptions import CannotHandleAssertion
-from authentik.providers.saml.models import SAMLProvider
+from authentik.providers.saml.models import SAMLProvider, peek_issuer
+from authentik.providers.saml.resolve import resolve_acs_url, resolve_verification_kp
 from authentik.providers.saml.utils.encoding import decode_base64_and_inflate
 from authentik.sources.saml.models import SAMLNameIDPolicy
 from authentik.sources.saml.processors.constants import (
@@ -42,6 +44,8 @@ class AuthNRequest:
 
     name_id_policy: str = SAML_NAME_ID_FORMAT_UNSPECIFIED
 
+    issuer: str | None = None
+    samlsp_pk : str | None = None
 
 class AuthNRequestParser:
     """AuthNRequest Parser"""
@@ -59,14 +63,14 @@ class AuthNRequestParser:
         # `AssertionConsumerServiceURL` can be omitted, and we should fallback to the
         # default ACS URL
         if "AssertionConsumerServiceURL" not in root.attrib:
-            request_acs_url = self.provider.acs_url.lower()
+            request_acs_url = resolve_acs_url(self.provider).lower()
         else:
             request_acs_url = root.attrib["AssertionConsumerServiceURL"]
 
-        if self.provider.acs_url.lower() != request_acs_url.lower():
+        if resolve_acs_url(self.provider).lower() != request_acs_url.lower():
             msg = (
                 f"ACS URL of {request_acs_url} doesn't match Provider "
-                f"ACS URL of {self.provider.acs_url}."
+                f"ACS URL of {resolve_acs_url(self.provider)}."
             )
             self.logger.warning(msg)
             raise CannotHandleAssertion(msg)
@@ -80,6 +84,11 @@ class AuthNRequestParser:
             auth_n_request.name_id_policy = name_id_policy.attrib.get(
                 "Format", SAML_NAME_ID_FORMAT_UNSPECIFIED
             )
+        issuer = peek_issuer(root)
+        auth_n_request.issuer = issuer
+        sp = self.provider.get_sp(issuer)
+        if sp:
+            auth_n_request.samlsp_pk = str(sp.pk)
 
         return auth_n_request
 
@@ -90,33 +99,41 @@ class AuthNRequestParser:
         except UnicodeDecodeError:
             raise CannotHandleAssertion(ERROR_CANNOT_DECODE_REQUEST) from None
 
-        verifier = self.provider.verification_kp
-        if not verifier:
+        root = ElementTree.fromstring(decoded_xml)
+        issuer = peek_issuer(root)
+        sp = self.provider.get_sp(issuer)
+
+        token = set_saml_ctx(SAMLContext(provider=self.provider, sp=sp, issuer=issuer))
+        try:
+            verifier = resolve_verification_kp(self.provider)
+            if not verifier:
+                return self._parse_xml(decoded_xml, relay_state)
+
+            root = lxml_from_string(decoded_xml)
+            xmlsec.tree.add_ids(root, ["ID"])
+            signature_nodes = root.xpath("/samlp:AuthnRequest/ds:Signature", namespaces=NS_MAP)
+            # No signatures, no verifier configured -> decode xml directly
+            if len(signature_nodes) < 1:
+                raise CannotHandleAssertion(ERROR_SIGNATURE_REQUIRED_BUT_ABSENT)
+
+            signature_node = signature_nodes[0]
+
+            if signature_node is not None:
+                try:
+                    ctx = xmlsec.SignatureContext()
+                    key = xmlsec.Key.from_memory(
+                        verifier.certificate_data,
+                        xmlsec.constants.KeyDataFormatCertPem,
+                        None,
+                    )
+                    ctx.key = key
+                    ctx.verify(signature_node)
+                except xmlsec.Error as exc:
+                    raise CannotHandleAssertion(ERROR_FAILED_TO_VERIFY) from exc
+
             return self._parse_xml(decoded_xml, relay_state)
-
-        root = lxml_from_string(decoded_xml)
-        xmlsec.tree.add_ids(root, ["ID"])
-        signature_nodes = root.xpath("/samlp:AuthnRequest/ds:Signature", namespaces=NS_MAP)
-        # No signatures, no verifier configured -> decode xml directly
-        if len(signature_nodes) < 1:
-            raise CannotHandleAssertion(ERROR_SIGNATURE_REQUIRED_BUT_ABSENT)
-
-        signature_node = signature_nodes[0]
-
-        if signature_node is not None:
-            try:
-                ctx = xmlsec.SignatureContext()
-                key = xmlsec.Key.from_memory(
-                    verifier.certificate_data,
-                    xmlsec.constants.KeyDataFormatCertPem,
-                    None,
-                )
-                ctx.key = key
-                ctx.verify(signature_node)
-            except xmlsec.Error as exc:
-                raise CannotHandleAssertion(ERROR_FAILED_TO_VERIFY) from exc
-
-        return self._parse_xml(decoded_xml, relay_state)
+        finally:
+            reset_saml_ctx(token)
 
     def parse_detached(
         self,
@@ -131,54 +148,67 @@ class AuthNRequestParser:
         except UnicodeDecodeError:
             raise CannotHandleAssertion(ERROR_CANNOT_DECODE_REQUEST) from None
 
-        verifier = self.provider.verification_kp
-        if not verifier:
-            return self._parse_xml(decoded_xml, relay_state)
+        root = ElementTree.fromstring(decoded_xml)
+        issuer = peek_issuer(root)
+        sp = self.provider.get_sp(issuer)
 
-        if verifier and not (signature and sig_alg):
-            raise CannotHandleAssertion(ERROR_SIGNATURE_REQUIRED_BUT_ABSENT)
-
-        if signature and sig_alg:
-            querystring = f"SAMLRequest={quote_plus(saml_request)}&"
-            if relay_state is not None:
-                querystring += f"RelayState={quote_plus(relay_state)}&"
-            querystring += f"SigAlg={quote_plus(sig_alg)}"
-
-            dsig_ctx = xmlsec.SignatureContext()
-            key = xmlsec.Key.from_memory(
-                verifier.certificate_data, xmlsec.constants.KeyDataFormatCertPem, None
-            )
-            dsig_ctx.key = key
-
-            sign_algorithm_transform_map = {
-                DSA_SHA1: xmlsec.constants.TransformDsaSha1,
-                RSA_SHA1: xmlsec.constants.TransformRsaSha1,
-                RSA_SHA256: xmlsec.constants.TransformRsaSha256,
-                RSA_SHA384: xmlsec.constants.TransformRsaSha384,
-                RSA_SHA512: xmlsec.constants.TransformRsaSha512,
-            }
-            sign_algorithm_transform = sign_algorithm_transform_map.get(
-                sig_alg, xmlsec.constants.TransformRsaSha1
-            )
-
-            try:
-                dsig_ctx.verify_binary(
-                    querystring.encode("utf-8"),
-                    sign_algorithm_transform,
-                    b64decode(signature),
-                )
-            except xmlsec.Error as exc:
-                raise CannotHandleAssertion(ERROR_FAILED_TO_VERIFY) from exc
+        token = set_saml_ctx(SAMLContext(provider=self.provider, sp=sp, issuer=issuer))
         try:
-            return self._parse_xml(decoded_xml, relay_state)
-        except ParseError as exc:
-            raise CannotHandleAssertion(ERROR_FAILED_TO_VERIFY) from exc
+
+            verifier = resolve_verification_kp(self.provider)
+            if not verifier:
+                return self._parse_xml(decoded_xml, relay_state)
+
+            if verifier and not (signature and sig_alg):
+                raise CannotHandleAssertion(ERROR_SIGNATURE_REQUIRED_BUT_ABSENT)
+
+            if signature and sig_alg:
+                querystring = f"SAMLRequest={quote_plus(saml_request)}&"
+                if relay_state is not None:
+                    querystring += f"RelayState={quote_plus(relay_state)}&"
+                querystring += f"SigAlg={quote_plus(sig_alg)}"
+
+                dsig_ctx = xmlsec.SignatureContext()
+                key = xmlsec.Key.from_memory(
+                    verifier.certificate_data, xmlsec.constants.KeyDataFormatCertPem, None
+                )
+                dsig_ctx.key = key
+
+                sign_algorithm_transform_map = {
+                    DSA_SHA1: xmlsec.constants.TransformDsaSha1,
+                    RSA_SHA1: xmlsec.constants.TransformRsaSha1,
+                    RSA_SHA256: xmlsec.constants.TransformRsaSha256,
+                    RSA_SHA384: xmlsec.constants.TransformRsaSha384,
+                    RSA_SHA512: xmlsec.constants.TransformRsaSha512,
+                }
+                sign_algorithm_transform = sign_algorithm_transform_map.get(
+                    sig_alg, xmlsec.constants.TransformRsaSha1
+                )
+
+                try:
+                    dsig_ctx.verify_binary(
+                        querystring.encode("utf-8"),
+                        sign_algorithm_transform,
+                        b64decode(signature),
+                    )
+                except xmlsec.Error as exc:
+                    raise CannotHandleAssertion(ERROR_FAILED_TO_VERIFY) from exc
+            try:
+                return self._parse_xml(decoded_xml, relay_state)
+            except ParseError as exc:
+                raise CannotHandleAssertion(ERROR_FAILED_TO_VERIFY) from exc
+        finally:
+            reset_saml_ctx(token)
 
     def idp_initiated(self) -> AuthNRequest:
         """Create IdP Initiated AuthNRequest"""
-        request = AuthNRequest(relay_state=None)
-        if self.provider.default_relay_state != "":
-            request.relay_state = self.provider.default_relay_state
-        if self.provider.default_name_id_policy != SAMLNameIDPolicy.UNSPECIFIED:
-            request.name_id_policy = self.provider.default_name_id_policy
-        return request
+        token = set_saml_ctx(SAMLContext(provider=self.provider, sp=None, issuer=None))
+        try:
+            request = AuthNRequest(relay_state=None)
+            if self.provider.default_relay_state != "":
+                request.relay_state = self.provider.default_relay_state
+            if self.provider.default_name_id_policy != SAMLNameIDPolicy.UNSPECIFIED:
+                request.name_id_policy = self.provider.default_name_id_policy
+            return request
+        finally:
+            reset_saml_ctx(token)

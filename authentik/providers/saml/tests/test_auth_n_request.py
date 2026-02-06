@@ -313,7 +313,7 @@ class TestAuthNRequest(TestCase):
         static_keypair = CertificateKeyPair.objects.create(
             name="samltool", certificate_data=REDIRECT_CERT
         )
-        provider = SAMLProvider(
+        provider = SAMLProvider.objects.create(
             name="samltool",
             authorization_flow=create_test_flow(),
             acs_url="https://10.120.20.200/saml-sp/SAML2/POST",
@@ -331,7 +331,7 @@ class TestAuthNRequest(TestCase):
 
     def test_signed_static(self):
         """Test post request with static request"""
-        provider = SAMLProvider(
+        provider = SAMLProvider.objects.create(
             name="aws",
             authorization_flow=create_test_flow(),
             acs_url=(
