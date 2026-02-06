@@ -9,7 +9,13 @@ from structlog.stdlib import get_logger
 from authentik.core.models import AuthenticatedSession, User
 from authentik.flows.models import in_memory_stage
 from authentik.providers.iframe_logout import IframeLogoutStageView
-from authentik.providers.saml.models import SAMLBindings, SAMLLogoutMethods, SAMLSession
+from authentik.providers.saml.models import (
+    SAMLSP,
+    SAMLBindings,
+    SAMLLogoutMethods,
+    SAMLProvider,
+    SAMLSession,
+)
 from authentik.providers.saml.native_logout import NativeLogoutStageView
 from authentik.providers.saml.processors.logout_request import LogoutRequestProcessor
 from authentik.providers.saml.tasks import send_saml_logout_request
@@ -65,30 +71,31 @@ def handle_saml_iframe_pre_user_logout(sender, request, user, executor, **kwargs
     executor.plan.context[PLAN_CONTEXT_SAML_RELAY_STATE] = relay_state
 
     for session in iframe_saml_sessions:
+        samlsp = get_samlsp(session)
         try:
             processor = LogoutRequestProcessor(
-                provider=session.provider,
+                provider=samlsp,
                 user=None,  # User context not needed for logout URL generation
-                destination=session.provider.sls_url,
+                destination=samlsp.sls_url,
                 name_id=session.name_id,
                 name_id_format=session.name_id_format,
                 session_index=session.session_index,
                 relay_state=relay_state,
             )
 
-            if session.provider.sls_binding == SAMLBindings.POST:
+            if samlsp.sls_binding == SAMLBindings.POST:
                 form_data = processor.get_post_form_data()
                 logout_data = {
-                    "url": session.provider.sls_url,
+                    "url": samlsp.sls_url,
                     "saml_request": form_data["SAMLRequest"],
-                    "provider_name": session.provider.name,
+                    "provider_name": samlsp.name,
                     "binding": SAMLBindings.POST,
                 }
             else:
                 logout_url = processor.get_redirect_url()
                 logout_data = {
                     "url": logout_url,
-                    "provider_name": session.provider.name,
+                    "provider_name": samlsp.name,
                     "binding": SAMLBindings.REDIRECT,
                 }
 
@@ -96,7 +103,7 @@ def handle_saml_iframe_pre_user_logout(sender, request, user, executor, **kwargs
         except (KeyError, AttributeError) as exc:
             LOGGER.warning(
                 "Failed to generate SAML logout URL",
-                provider=session.provider.name,
+                provider=samlsp,
                 exc=exc,
             )
 
@@ -153,31 +160,32 @@ def handle_flow_pre_user_logout(sender, request, user, executor, **kwargs):
     executor.plan.context[PLAN_CONTEXT_SAML_RELAY_STATE] = relay_state
 
     for session in native_saml_sessions:
+        samlsp = get_samlsp(session)
         try:
             processor = LogoutRequestProcessor(
-                provider=session.provider,
+                provider=samlsp,
                 user=None,  # User is already logged out
-                destination=session.provider.sls_url,
+                destination=samlsp.sls_url,
                 name_id=session.name_id,
                 name_id_format=session.name_id_format,
                 session_index=session.session_index,
                 relay_state=relay_state,
             )
 
-            if session.provider.sls_binding == SAMLBindings.POST:
+            if samlsp.sls_binding == SAMLBindings.POST:
                 form_data = processor.get_post_form_data()
                 logout_data = {
-                    "post_url": session.provider.sls_url,
+                    "post_url": samlsp.sls_url,
                     "saml_request": form_data["SAMLRequest"],
                     "relay_state": form_data["RelayState"],
-                    "provider_name": session.provider.name,
+                    "provider_name": samlsp.name,
                     "binding": SAMLBindings.POST,
                 }
             else:
                 logout_url = processor.get_redirect_url()
                 logout_data = {
                     "redirect_url": logout_url,
-                    "provider_name": session.provider.name,
+                    "provider_name": samlsp.name,
                     "binding": SAMLBindings.REDIRECT,
                 }
 
@@ -185,7 +193,7 @@ def handle_flow_pre_user_logout(sender, request, user, executor, **kwargs):
         except (KeyError, AttributeError) as exc:
             LOGGER.warning(
                 "Failed to generate SAML native logout data",
-                provider=session.provider.name,
+                provider=samlsp.name,
                 exc=exc,
             )
 
@@ -210,16 +218,17 @@ def user_session_deleted_saml_logout(sender, instance: AuthenticatedSession, **_
     )
 
     for saml_session in backchannel_saml_sessions:
+        samlsp = get_samlsp(saml_session)
         LOGGER.info(
             "Triggering backchannel SAML logout for deleted user session",
             user=saml_session.user,
-            provider=saml_session.provider.name,
+            provider=samlsp.name,
             session_index=saml_session.session_index,
         )
 
         send_saml_logout_request.send(
-            provider_pk=saml_session.provider.pk,
-            sls_url=saml_session.provider.sls_url,
+            provider_pk=samlsp.pk,
+            sls_url=samlsp.sls_url,
             name_id=saml_session.name_id,
             name_id_format=saml_session.name_id_format,
             session_index=saml_session.session_index,
@@ -243,17 +252,24 @@ def user_deactivated_saml_logout(sender, instance: User, **kwargs):
     )
 
     for saml_session in backchannel_saml_sessions:
+        samlsp = get_samlsp(saml_session)
         LOGGER.info(
             "Triggering backchannel SAML logout for deactivated user",
             user=instance,
-            provider=saml_session.provider.name,
+            provider=samlsp.name,
             session_index=saml_session.session_index,
         )
 
         send_saml_logout_request.send(
-            provider_pk=saml_session.provider.pk,
-            sls_url=saml_session.provider.sls_url,
+            provider_pk=samlsp.pk,
+            sls_url=samlsp.sls_url,
             name_id=saml_session.name_id,
             name_id_format=saml_session.name_id_format,
             session_index=saml_session.session_index,
         )
+
+
+def get_samlsp(session: SAMLSession) -> SAMLProvider | SAMLSP:
+    if session.samlsp is None:
+        return session.provider
+    return session.samlsp

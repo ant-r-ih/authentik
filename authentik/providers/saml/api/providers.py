@@ -26,15 +26,22 @@ from structlog.stdlib import get_logger
 from authentik.api.validation import validate
 from authentik.core.api.providers import ProviderSerializer
 from authentik.core.api.used_by import UsedByMixin
-from authentik.core.api.utils import PassiveSerializer, PropertyMappingPreviewSerializer
+from authentik.core.api.utils import (
+    ModelSerializer,
+    PassiveSerializer,
+    PropertyMappingPreviewSerializer,
+)
 from authentik.core.models import Provider
-from authentik.crypto.models import CertificateKeyPair, CertificateReference
 from authentik.flows.models import Flow, FlowDesignation
-from authentik.providers.saml.models import SAMLLogoutMethods, SAMLProvider
+from authentik.providers.saml.models import SAMLSP, SAMLLogoutMethods, SAMLProvider
 from authentik.providers.saml.processors.assertion import AssertionProcessor
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequest
 from authentik.providers.saml.processors.metadata import MetadataProcessor
 from authentik.providers.saml.processors.metadata_parser import ServiceProviderMetadataParser
+from authentik.providers.saml.utils.certrefs import (
+    sync_saml_provider_cert_refs,
+    sync_saml_sp_cert_refs,
+)
 from authentik.rbac.decorators import permission_required
 from authentik.sources.saml.processors.constants import SAML_BINDING_POST, SAML_BINDING_REDIRECT
 
@@ -407,48 +414,50 @@ class SAMLProviderViewSet(UsedByMixin, ModelViewSet):
         return Response(serializer.data)
 
 
+class SAMLSPSerializer(ModelSerializer):
 
-REF_MODEL_SAML_PROVIDER = "authentik_providers_saml.SAMLProvider"
+    def create(self, validated_data):
+        instance: SAMLSP = super().create(validated_data)
+        sync_saml_sp_cert_refs(instance)
+        return instance
 
-def sync_saml_provider_cert_refs(provider: SAMLProvider) -> None:
-    """Ensure CertificateReference rows reflect provider.{signing,verification,encryption}_kp."""
-    desired: set[tuple[str, str]] = set()
-    if provider.signing_kp_id:
-        desired.add((str(provider.signing_kp_id), CertificateReference.Usage.SAML_SIGNING))
-    if provider.encryption_kp_id:
-        desired.add((str(provider.encryption_kp_id), CertificateReference.Usage.SAML_ENCRYPTION))
-    if provider.verification_kp_id:
-        desired.add((str(provider.verification_kp_id), CertificateReference.Usage.SAML_VERIFICATION))
+    def update(self, instance, validated_data):
+        instance: SAMLSP = super().update(instance, validated_data)
+        sync_saml_sp_cert_refs(instance)
+        return instance
 
-    # 現在の参照（この provider 分だけ）
-    existing = CertificateReference.objects.filter(
-        ref_model=REF_MODEL_SAML_PROVIDER,
-        ref_pk=str(provider.pk),
-    )
+    class Meta:
+        model = SAMLSP
+        fields = [
+            "pk",
+            "uuid",
+            "name",
+            "provider",
+            "entity_id",
+            "enabled",
+            "acs_url",
+            "sp_binding",
+            "sls_url",
+            "sls_binding",
+            "authn_requests_signed",
+            "want_assertions_signed",
+            "name_id_policy",
+            "verification_kp",
+            "created",
+            "last_updated",
+        ]
+        read_only_fields = ["pk", "uuid", "created", "last_updated"]
 
-    existing_set = set(
-        existing.values_list("certificate_id", "usage")
-    )
 
-    to_add = desired - existing_set
-    to_del = existing_set - desired
+class SAMLSPViewSet(UsedByMixin, ModelViewSet):
+    queryset = SAMLSP.objects.all()
+    serializer_class = SAMLSPSerializer
+    filterset_fields = [
+        "provider",
+        "enabled",
+        "entity_id",
+        "name",
+    ]
 
-    if to_del:
-        # certificate_id は UUID なので str に揃えるなら注意。
-        # values_list で取ると UUID のままなので、そのままフィルタする方が安全。
-        for cert_id, usage in to_del:
-            existing.filter(certificate_id=cert_id, usage=usage).delete()
-
-    if to_add:
-        CertificateReference.objects.bulk_create(
-            [
-                CertificateReference(
-                    certificate_id=cert_id,
-                    ref_model=REF_MODEL_SAML_PROVIDER,
-                    ref_pk=str(provider.pk),
-                    usage=usage,
-                )
-                for cert_id, usage in to_add
-            ],
-            ignore_conflicts=True,  # UniqueConstraint があるなら保険
-        )
+    ordering = ["provider", "name", "entity_id"]
+    search_fields = ["name", "entity_id"]

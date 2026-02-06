@@ -10,10 +10,19 @@ from defusedxml import ElementTree
 from structlog.stdlib import get_logger
 
 from authentik.lib.xml import lxml_from_string
-from authentik.providers.saml.context import SAMLContext, reset_saml_ctx, set_saml_ctx
+from authentik.providers.saml.context import (
+    CURRENT_SAML_CTX,
+    SAMLContext,
+    reset_saml_ctx,
+    set_saml_ctx,
+)
 from authentik.providers.saml.exceptions import CannotHandleAssertion
 from authentik.providers.saml.models import SAMLProvider, peek_issuer
-from authentik.providers.saml.resolve import resolve_acs_url, resolve_verification_kp
+from authentik.providers.saml.resolve import (
+    resolve_acs_url,
+    resolve_sp_binding,
+    resolve_verification_kp,
+)
 from authentik.providers.saml.utils.encoding import decode_base64_and_inflate
 from authentik.sources.saml.models import SAMLNameIDPolicy
 from authentik.sources.saml.processors.constants import (
@@ -45,7 +54,10 @@ class AuthNRequest:
     name_id_policy: str = SAML_NAME_ID_FORMAT_UNSPECIFIED
 
     issuer: str | None = None
-    samlsp_pk : str | None = None
+    samlsp_pk: str | None = None
+    acs_url: str | None = None
+    sp_binding: str | None = None
+
 
 class AuthNRequestParser:
     """AuthNRequest Parser"""
@@ -67,15 +79,22 @@ class AuthNRequestParser:
         else:
             request_acs_url = root.attrib["AssertionConsumerServiceURL"]
 
-        if resolve_acs_url(self.provider).lower() != request_acs_url.lower():
+        provider_acs_url = resolve_acs_url(self.provider)
+        if self.provider.strict_acs_url and provider_acs_url.lower() != request_acs_url.lower():
             msg = (
                 f"ACS URL of {request_acs_url} doesn't match Provider "
-                f"ACS URL of {resolve_acs_url(self.provider)}."
+                f"ACS URL of {provider_acs_url}."
             )
             self.logger.warning(msg)
             raise CannotHandleAssertion(msg)
 
         auth_n_request = AuthNRequest(id=root.attrib["ID"], relay_state=relay_state)
+        auth_n_request.acs_url = request_acs_url
+
+        if "ProtocolBinding" not in root.attrib:
+            auth_n_request.sp_binding = resolve_sp_binding(self.provider).lower()
+        else:
+            auth_n_request.sp_binding = root.attrib["ProtocolBinding"]
 
         # Check if AuthnRequest has a NameID Policy object
         name_id_policies = root.findall(f"{{{NS_SAML_PROTOCOL}}}NameIDPolicy")
@@ -84,11 +103,13 @@ class AuthNRequestParser:
             auth_n_request.name_id_policy = name_id_policy.attrib.get(
                 "Format", SAML_NAME_ID_FORMAT_UNSPECIFIED
             )
-        issuer = peek_issuer(root)
-        auth_n_request.issuer = issuer
-        sp = self.provider.get_sp(issuer)
-        if sp:
-            auth_n_request.samlsp_pk = str(sp.pk)
+        ctx = CURRENT_SAML_CTX.get()
+        if ctx:
+            auth_n_request.issuer = ctx.issuer
+            if ctx.sp:
+                auth_n_request.samlsp_pk = str(ctx.sp.pk)
+        else:
+            auth_n_request.issuer = peek_issuer(root)
 
         return auth_n_request
 

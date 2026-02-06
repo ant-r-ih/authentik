@@ -38,7 +38,6 @@ from authentik.api.validation import validate
 from authentik.core.api.used_by import UsedByMixin
 from authentik.core.api.utils import ModelSerializer, PassiveSerializer
 from authentik.core.models import UserTypes
-from authentik.crypto.apps import MANAGED_KEY
 from authentik.crypto.builder import CertificateBuilder, PrivateKeyAlg
 from authentik.crypto.models import CertificateKeyPair, CertificateReference, KeyType
 from authentik.events.models import Event, EventAction
@@ -236,7 +235,7 @@ class CertificateKeyPairFilter(FilterSet):
 class CertificateKeyPairViewSet(UsedByMixin, ModelViewSet):
     """CertificateKeyPair Viewset"""
 
-#    queryset = CertificateKeyPair.objects.exclude(managed=MANAGED_KEY)
+    #    queryset = CertificateKeyPair.objects.exclude(managed=MANAGED_KEY)
     queryset = CertificateKeyPair.objects.all()
     serializer_class = CertificateKeyPairSerializer
     filterset_class = CertificateKeyPairFilter
@@ -358,7 +357,5 @@ class CertificateKeyPairViewSet(UsedByMixin, ModelViewSet):
 
     def perform_destroy(self, instance: CertificateKeyPair) -> None:
         if CertificateReference.objects.filter(certificate=instance).exists():
-            raise ValidationError(
-                "Certificate is still referenced and cannot be deleted."
-            )
+            raise ValidationError("Certificate is still referenced and cannot be deleted.")
         return super().perform_destroy(instance)

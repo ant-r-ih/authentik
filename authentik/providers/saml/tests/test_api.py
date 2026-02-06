@@ -9,7 +9,7 @@ from rest_framework.test import APITestCase
 from authentik.blueprints.tests import apply_blueprint
 from authentik.core.models import Application
 from authentik.core.tests.utils import create_test_admin_user, create_test_cert, create_test_flow
-from authentik.crypto.models import CertificateReference
+from authentik.crypto.models import REF_MODEL_SAML_PROVIDER, CertificateReference
 from authentik.flows.models import FlowDesignation
 from authentik.lib.generators import generate_id
 from authentik.lib.tests.utils import load_fixture
@@ -27,7 +27,7 @@ class TestSAMLProviderAPI(APITestCase):
     def _assert_cert_ref_exists(self, cert, provider: SAMLProvider, usage: str, *, count: int = 1):
         qs = CertificateReference.objects.filter(
             certificate=cert,
-            ref_model="authentik_providers_saml.SAMLProvider",
+            ref_model=REF_MODEL_SAML_PROVIDER,
             ref_pk=str(provider.pk),
             usage=usage,
         )
@@ -229,6 +229,7 @@ class TestSAMLProviderAPI(APITestCase):
             ]["Value"],
             [self.user.username],
         )
+
     def test_provider_create_and_update_creates_references(self):
         """Create+Update should create/update CertificateReference rows for selected keypairs."""
 

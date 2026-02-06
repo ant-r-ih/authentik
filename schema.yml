@@ -18173,6 +18173,10 @@ paths:
           This determines how authentik sends the response back to the Service Provider.
 
       - in: query
+        name: strict_acs_url
+        schema:
+          type: boolean
+      - in: query
         name: verification_kp
         schema:
           type: string
@@ -18426,6 +18430,49 @@ paths:
           $ref: '#/components/responses/ValidationErrorResponse'
         '403':
           $ref: '#/components/responses/GenericErrorResponse'
+  /providers/saml/catalog/entity/:
+    post:
+      operationId: providers_saml_catalog_entity_create
+      description: |-
+        POST multipart/form-data:
+          - file: metadata XML
+          - entity_id: exact match key
+
+        Returns:
+          - entity_id
+          - xml: serialized <md:EntityDescriptor> element
+          - container_name_chain
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '200':
+          description: EntityDescriptor XML string
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/saml/catalog/preview/:
+    post:
+      operationId: providers_saml_catalog_preview_create
+      description: |-
+        POST multipart/form-data:
+          - file: metadata XML (EntitiesDescriptor or EntityDescriptor)
+
+        Query params:
+          - kind: "sp" | "idp" | "any" (default "any")
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '200':
+          description: List of entity summaries
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
   /providers/saml/import_metadata/:
     post:
       operationId: providers_saml_import_metadata_create
@@ -18449,6 +18496,240 @@ paths:
           description: ''
         '400':
           description: Bad request
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/samlsp/:
+    get:
+      operationId: providers_samlsp_list
+      description: Mixin to add a used_by endpoint to return a list of all objects
+        using this object
+      parameters:
+      - in: query
+        name: enabled
+        schema:
+          type: boolean
+      - in: query
+        name: entity_id
+        schema:
+          type: string
+      - $ref: '#/components/parameters/QueryName'
+      - $ref: '#/components/parameters/QueryPaginationOrdering'
+      - $ref: '#/components/parameters/QueryPaginationPage'
+      - $ref: '#/components/parameters/QueryPaginationPageSize'
+      - in: query
+        name: provider
+        schema:
+          type: integer
+      - $ref: '#/components/parameters/QuerySearch'
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSAMLSPList'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+    post:
+      operationId: providers_samlsp_create
+      description: Mixin to add a used_by endpoint to return a list of all objects
+        using this object
+      tags:
+      - providers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SAMLSPRequest'
+        required: true
+      security:
+      - authentik: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSP'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/samlsp/{id}/:
+    get:
+      operationId: providers_samlsp_retrieve
+      description: Mixin to add a used_by endpoint to return a list of all objects
+        using this object
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this SAML Service Provider.
+        required: true
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSP'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+    put:
+      operationId: providers_samlsp_update
+      description: Mixin to add a used_by endpoint to return a list of all objects
+        using this object
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this SAML Service Provider.
+        required: true
+      tags:
+      - providers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SAMLSPRequest'
+        required: true
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSP'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+    patch:
+      operationId: providers_samlsp_partial_update
+      description: Mixin to add a used_by endpoint to return a list of all objects
+        using this object
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this SAML Service Provider.
+        required: true
+      tags:
+      - providers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSAMLSPRequest'
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSP'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+    delete:
+      operationId: providers_samlsp_destroy
+      description: Mixin to add a used_by endpoint to return a list of all objects
+        using this object
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this SAML Service Provider.
+        required: true
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '204':
+          description: No response body
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/samlsp/{id}/used_by/:
+    get:
+      operationId: providers_samlsp_used_by_list
+      description: Get a list of all objects that use this object
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this SAML Service Provider.
+        required: true
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UsedBy'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/samlsp/import/:
+    post:
+      operationId: providers_samlsp_import_create
+      description: Create/update a SAMLSP from an uploaded EntityDescriptor XML string.
+      tags:
+      - providers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SAMLSPImportRequest'
+        required: true
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSP'
+          description: ''
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSP'
+          description: ''
+        '400':
+          description: Invalid import
         '403':
           $ref: '#/components/responses/GenericErrorResponse'
   /providers/scim/:
@@ -44529,6 +44810,21 @@ components:
       - pagination
       - results
       - autocomplete
+    PaginatedSAMLSPList:
+      type: object
+      properties:
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SAMLSP'
+        autocomplete:
+          $ref: '#/components/schemas/Autocomplete'
+      required:
+      - pagination
+      - results
+      - autocomplete
     PaginatedSAMLSourceList:
       type: object
       properties:
@@ -48450,6 +48746,50 @@ components:
           description: Default relay_state value for IDP-initiated logins
         default_name_id_policy:
           $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+    PatchedSAMLSPRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Optional display name for this Service Provider entry.
+        provider:
+          type: integer
+          title: SAML Provider
+        entity_id:
+          type: string
+          minLength: 1
+          description: Service Provider EntityID (Issuer in AuthnRequest).
+        enabled:
+          type: boolean
+          description: If enabled, this SP can be selected during request processing.
+        acs_url:
+          type: string
+          minLength: 1
+          description: Assertion Consumer Service URL (metadata-derived).
+          format: uri
+        sp_binding:
+          allOf:
+          - $ref: '#/components/schemas/SAMLBindingsEnum'
+          description: Preferred binding for ACS.
+        sls_url:
+          type: string
+          description: Single Logout Service URL (metadata-derived).
+          format: uri
+        sls_binding:
+          allOf:
+          - $ref: '#/components/schemas/SAMLBindingsEnum'
+          description: Preferred binding for SLS.
+        authn_requests_signed:
+          type: boolean
+        want_assertions_signed:
+          type: boolean
+        name_id_policy:
+          $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+        verification_kp:
+          type: string
+          format: uuid
+          nullable: true
+          description: SP request signature verification certificate (metadata-derived).
     PatchedSAMLSourcePropertyMappingRequest:
       type: object
       description: SAMLSourcePropertyMapping Serializer
@@ -51967,6 +52307,142 @@ components:
       - authorization_flow
       - invalidation_flow
       - name
+    SAMLSP:
+      type: object
+      properties:
+        pk:
+          type: integer
+          readOnly: true
+          title: ID
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          description: Optional display name for this Service Provider entry.
+        provider:
+          type: integer
+          title: SAML Provider
+        entity_id:
+          type: string
+          description: Service Provider EntityID (Issuer in AuthnRequest).
+        enabled:
+          type: boolean
+          description: If enabled, this SP can be selected during request processing.
+        acs_url:
+          type: string
+          description: Assertion Consumer Service URL (metadata-derived).
+          format: uri
+        sp_binding:
+          allOf:
+          - $ref: '#/components/schemas/SAMLBindingsEnum'
+          description: Preferred binding for ACS.
+        sls_url:
+          type: string
+          description: Single Logout Service URL (metadata-derived).
+          format: uri
+        sls_binding:
+          allOf:
+          - $ref: '#/components/schemas/SAMLBindingsEnum'
+          description: Preferred binding for SLS.
+        authn_requests_signed:
+          type: boolean
+        want_assertions_signed:
+          type: boolean
+        name_id_policy:
+          $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+        verification_kp:
+          type: string
+          format: uuid
+          nullable: true
+          description: SP request signature verification certificate (metadata-derived).
+        created:
+          type: string
+          format: date-time
+          readOnly: true
+        last_updated:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - acs_url
+      - created
+      - entity_id
+      - last_updated
+      - pk
+      - provider
+      - uuid
+    SAMLSPImportRequest:
+      type: object
+      description: |-
+        Import payload for creating/updating SAMLSP from a single EntityDescriptor XML.
+
+        We keep the import payload explicit to avoid hidden coupling with the catalog API.
+      properties:
+        provider:
+          type: integer
+        entity_xml:
+          type: string
+          minLength: 1
+        enabled:
+          type: boolean
+          default: true
+        overwrite:
+          type: boolean
+          default: true
+          description: If true, metadata-derived fields overwrite existing SP fields.
+      required:
+      - entity_xml
+      - provider
+    SAMLSPRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Optional display name for this Service Provider entry.
+        provider:
+          type: integer
+          title: SAML Provider
+        entity_id:
+          type: string
+          minLength: 1
+          description: Service Provider EntityID (Issuer in AuthnRequest).
+        enabled:
+          type: boolean
+          description: If enabled, this SP can be selected during request processing.
+        acs_url:
+          type: string
+          minLength: 1
+          description: Assertion Consumer Service URL (metadata-derived).
+          format: uri
+        sp_binding:
+          allOf:
+          - $ref: '#/components/schemas/SAMLBindingsEnum'
+          description: Preferred binding for ACS.
+        sls_url:
+          type: string
+          description: Single Logout Service URL (metadata-derived).
+          format: uri
+        sls_binding:
+          allOf:
+          - $ref: '#/components/schemas/SAMLBindingsEnum'
+          description: Preferred binding for SLS.
+        authn_requests_signed:
+          type: boolean
+        want_assertions_signed:
+          type: boolean
+        name_id_policy:
+          $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+        verification_kp:
+          type: string
+          format: uuid
+          nullable: true
+          description: SP request signature verification certificate (metadata-derived).
+      required:
+      - acs_url
+      - entity_id
+      - provider
     SAMLSource:
       type: object
       description: SAMLSource Serializer

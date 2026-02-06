@@ -2,34 +2,53 @@
 from django.db import migrations, models
 import django.db.models.deletion
 
+
 class Migration(migrations.Migration):
     dependencies = [
-        ("authentik_crypto", "0005_alter_certificatekeypair_options"),  # 直前に合わせて調整
+        ("authentik_crypto", "0005_alter_certificatekeypair_options"),
     ]
 
     operations = [
         migrations.CreateModel(
             name="CertificateReference",
             fields=[
-                # ✅ Django のデフォルトPK（これが無いと今回みたいに壊れる）
-                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
-
-                # ✅ CreatedUpdatedModel のフィールド（抽象基底ならここに展開される）
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+                    ),
+                ),
                 ("created", models.DateTimeField(auto_now_add=True)),
                 ("last_updated", models.DateTimeField(auto_now=True)),
-
                 ("ref_model", models.CharField(max_length=200)),
                 ("ref_pk", models.CharField(max_length=64)),
-                ("usage", models.CharField(max_length=64, choices=[
-                    ("saml.signing", "SAML signing"),
-                    ("saml.encryption", "SAML encryption"),
-                    ("saml.verification", "SAML verification"),
-                ])),
-                ("certificate", models.ForeignKey(
-                    on_delete=django.db.models.deletion.CASCADE,
-                    related_name="references",
-                    to="authentik_crypto.certificatekeypair",
-                )),
+                (
+                    "usage",
+                    models.CharField(
+                        max_length=64,
+                        choices=[
+                            ("saml.signing", "SAML signing"),
+                            ("saml.encryption", "SAML encryption"),
+                            ("saml.verification", "SAML verification"),
+                        ],
+                    ),
+                ),
+                (
+                    "fingerprint_sha256",
+                    models.CharField(
+                        max_length=95,  # "AA:BB:..." (SHA256) = 95 chars with colons
+                        db_index=True,
+                        help_text="SHA256 fingerprint of referenced certificate at time of linking.",
+                    ),
+                ),
+                (
+                    "certificate",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="references",
+                        to="authentik_crypto.certificatekeypair",
+                    ),
+                ),
             ],
             options={
                 "verbose_name": "Certificate reference",

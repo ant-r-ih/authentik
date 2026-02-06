@@ -6,11 +6,12 @@ from dataclasses import dataclass
 
 from defusedxml import ElementTree
 from django.test import TestCase
-from lxml import etree
 
-from authentik.core.tests.utils import create_test_cert, create_test_flow
+from authentik.core.tests.utils import (
+    create_test_cert,
+    create_test_flow,
+)
 from authentik.providers.saml.context import (
-    CURRENT_SAML_CTX,
     SAMLContext,
     get_saml_ctx,
     reset_saml_ctx,
@@ -20,10 +21,6 @@ from authentik.providers.saml.exceptions import CannotHandleAssertion
 from authentik.providers.saml.models import SAMLProvider
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequestParser
 from authentik.providers.saml.resolve import resolve_acs_url, resolve_verification_kp
-from authentik.providers.saml.utils.encoding import (
-    decode_base64_and_inflate,
-    deflate_and_base64_encode,
-)
 
 POST_REQUEST = (
     "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz48c2FtbDJwOkF1dGhuUmVxdWVzdCB4bWxuczpzYW1sMn"
@@ -48,15 +45,17 @@ REDIRECT_REQUEST = (
 
 REDIRECT_RELAY_STATE = "ss:mem:7a054b4af44f34f89dd2d973f383c250b6b076e7f06cfa8276008a6504eaf3c7"
 
+
 @dataclass(slots=True)
 class DummySP:
     """Minimal SP stub for resolver tests."""
+
     acs_url: str | None = None
     verification_kp: object | None = None
 
 
 class TestSAMLResolver(TestCase):
-    def test_resolver_acs_url_and_verification_kp(self):
+    def test_sp_resolver(self):
         """Resolver should prefer SP values when present, otherwise fallback to provider.
         ContextVar must be reset after use.
         """
@@ -100,7 +99,7 @@ class TestSAMLResolver(TestCase):
             reset_saml_ctx(token2)
         self.assertIsNone(get_saml_ctx())
 
-    def test_parse_sets_samlsp_pk_and_resets_ctx(self):
+    def test_parse_post_sets_samlsp_pk_and_resets_ctx(self):
         provider = SAMLProvider.objects.create(
             name="example",
             authorization_flow=create_test_flow(),
@@ -120,7 +119,7 @@ class TestSAMLResolver(TestCase):
 
         self.assertIsNone(get_saml_ctx())
 
-    def test_parse_sets_samlsp_pk_and_resets_ctx_redirect(self):
+    def test_parse_redirect_sets_samlsp_pk_and_resets_ctx(self):
         provider = SAMLProvider.objects.create(
             name="example",
             authorization_flow=create_test_flow(),
@@ -146,11 +145,18 @@ class TestSAMLResolver(TestCase):
             authorization_flow=create_test_flow(),
             acs_url="https://eu-central-1.signin.aws.amazon.com/platform/saml/acs/2d737f96-55fb-4035-953e-5e24134eb778",
         )
+        #        provider.strict_acs_url = True # Default value
         req = AuthNRequestParser(provider).parse(POST_REQUEST)
 
         self.assertIsNotNone(req)
-        self.assertEqual(req.issuer, "https://eu-central-1.signin.aws.amazon.com/platform/saml/d-99672f8278")
+        self.assertEqual(
+            req.issuer, "https://eu-central-1.signin.aws.amazon.com/platform/saml/d-99672f8278"
+        )
         self.assertIsNone(req.samlsp_pk)
+        self.assertEqual(
+            req.acs_url,
+            "https://eu-central-1.signin.aws.amazon.com/platform/saml/acs/2d737f96-55fb-4035-953e-5e24134eb778",
+        )
 
     def test_parse_without_sp_strict_acs_mismatch(self):
         provider = SAMLProvider.objects.create(
@@ -158,8 +164,27 @@ class TestSAMLResolver(TestCase):
             authorization_flow=create_test_flow(),
             acs_url="https://example.com/acs",
         )
+        #        provider.strict_acs_url = True # Default value
         with self.assertRaises(CannotHandleAssertion):
             AuthNRequestParser(provider).parse(POST_REQUEST)
+
+    def test_parse_without_sp_soft_acs_mismatch(self):
+        provider = SAMLProvider.objects.create(
+            name="strict_ng",
+            authorization_flow=create_test_flow(),
+            acs_url="https://example.com/acs",
+        )
+        provider.strict_acs_url = False
+        req = AuthNRequestParser(provider).parse(POST_REQUEST)
+        self.assertIsNotNone(req)
+        self.assertEqual(
+            req.issuer, "https://eu-central-1.signin.aws.amazon.com/platform/saml/d-99672f8278"
+        )
+        self.assertIsNone(req.samlsp_pk)
+        self.assertEqual(
+            req.acs_url,
+            "https://eu-central-1.signin.aws.amazon.com/platform/saml/acs/2d737f96-55fb-4035-953e-5e24134eb778",
+        )
 
     def test_parse_without_acs_url_attr_falls_back_to_provider_acs(self):
         provider = SAMLProvider.objects.create(

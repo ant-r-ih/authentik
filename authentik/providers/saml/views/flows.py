@@ -21,7 +21,12 @@ from authentik.flows.planner import PLAN_CONTEXT_APPLICATION
 from authentik.flows.stage import ChallengeStageView
 from authentik.lib.views import bad_request_message
 from authentik.policies.utils import delete_none_values
-from authentik.providers.saml.models import SAMLBindings, SAMLProvider, SAMLSession
+from authentik.providers.saml.models import (
+    SAMLSP,
+    SAMLBindings,
+    SAMLProvider,
+    SAMLSession,
+)
 from authentik.providers.saml.processors.assertion import AssertionProcessor
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequest
 from authentik.providers.saml.utils.encoding import deflate_and_base64_encode, nice64
@@ -58,6 +63,9 @@ class SAMLFlowFinalView(ChallengeStageView):
             return self.executor.stage_invalid()
 
         auth_n_request: AuthNRequest = self.executor.plan.context[PLAN_CONTEXT_SAML_AUTH_N_REQUEST]
+        samlsp = None
+        if getattr(auth_n_request, "samlsp_pk", None):
+            samlsp = SAMLSP.objects.filter(pk=auth_n_request.samlsp_pk).first()
         try:
             processor = AssertionProcessor(provider, request, auth_n_request)
             response = processor.build_response()
@@ -81,6 +89,7 @@ class SAMLFlowFinalView(ChallengeStageView):
                         "name_id_format": processor.name_id_format,
                         "expires": processor.session_not_on_or_after_datetime,
                         "expiring": True,
+                        "samlsp": samlsp,
                     },
                 )
         except SAMLException as exc:
@@ -98,7 +107,7 @@ class SAMLFlowFinalView(ChallengeStageView):
             flow=self.executor.plan.flow_pk,
         ).from_http(self.request)
 
-        if provider.sp_binding == SAMLBindings.POST:
+        if auth_n_request.sp_binding == SAMLBindings.POST:
             form_attrs = delete_none_values(
                 {
                     REQUEST_KEY_SAML_RESPONSE: nice64(response),
@@ -113,18 +122,20 @@ class SAMLFlowFinalView(ChallengeStageView):
                         PLAN_CONTEXT_TITLE,
                         _("Redirecting to {app}...".format_map({"app": application.name})),
                     ),
-                    "url": provider.acs_url,
+                    "url": auth_n_request.acs_url if auth_n_request.acs_url else provider.acs_url,
                     "attrs": form_attrs,
                 },
             )
-        if provider.sp_binding == SAMLBindings.REDIRECT:
+        if auth_n_request.sp_binding == SAMLBindings.REDIRECT:
             url_args = {
                 REQUEST_KEY_SAML_RESPONSE: deflate_and_base64_encode(response),
             }
             if auth_n_request.relay_state:
                 url_args[REQUEST_KEY_RELAY_STATE] = auth_n_request.relay_state
             querystring = urlencode(url_args)
-            return redirect(f"{provider.acs_url}?{querystring}")
+            return redirect(
+                f"{auth_n_request.acs_url if auth_n_request.acs_url else provider.acs_url}?{querystring}"  # noqa: E501
+            )
         return bad_request_message(request, "Invalid sp_binding specified")
 
     def get_challenge(self, *args, **kwargs) -> Challenge:

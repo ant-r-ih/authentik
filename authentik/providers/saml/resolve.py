@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from authentik.crypto.models import CertificateKeyPair
 from authentik.providers.saml.context import get_current_sp
-from authentik.providers.saml.models import SAMLLogoutMethods, SAMLProvider
+from authentik.providers.saml.models import SAMLProvider
 
 # NOTE: sp should be SAMLSP, but be duck on development.
 
