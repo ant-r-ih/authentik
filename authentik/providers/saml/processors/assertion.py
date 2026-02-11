@@ -17,6 +17,12 @@ from authentik.events.signals import get_login_event
 from authentik.lib.utils.time import timedelta_from_string
 from authentik.providers.saml.models import SAMLPropertyMapping, SAMLProvider
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequest
+from authentik.providers.saml.resolve import (
+    resolve_digest_algorithm,
+    resolve_encryption_kp,
+    resolve_signature_algorithm,
+    resolve_signing_kp,
+)
 from authentik.providers.saml.utils import get_random_id
 from authentik.providers.saml.utils.time import get_time_string
 from authentik.sources.ldap.auth import LDAP_DISTINGUISHED_NAME
@@ -91,12 +97,33 @@ class AssertionProcessor:
 
     def get_attributes(self) -> Element:
         """Get AttributeStatement Element with Attributes from Property Mappings."""
-        # https://commons.lbl.gov/display/IDMgmt/Attribute+Definitions
         attribute_statement = Element(f"{{{NS_SAML_ASSERTION}}}AttributeStatement")
         user = self.http_request.user
-        for mapping in SAMLPropertyMapping.objects.filter(provider=self.provider).order_by(
-            "saml_name"
-        ):
+
+        cfg = getattr(self.auth_n_request, "cfg", None)
+        mappings_qs = None
+
+        if cfg is not None and getattr(cfg, "property_mappings", None) is not None:
+            mappings_qs = cfg.property_mappings
+            if hasattr(mappings_qs, "all"):
+                mappings_qs = mappings_qs.all()
+
+        if mappings_qs is None:
+            mappings_qs = SAMLPropertyMapping.objects.filter(provider=self.provider)
+
+        if hasattr(mappings_qs, "order_by"):
+            try:
+                mappings_qs = mappings_qs.order_by("saml_name")
+            except Exception:
+                mapping_pks = list(mappings_qs.values_list("pk", flat=True))
+                mappings_qs = SAMLPropertyMapping.objects.filter(pk__in=mapping_pks).order_by("saml_name")
+        else:
+            mappings_qs = sorted(
+                [m for m in mappings_qs if isinstance(m, SAMLPropertyMapping)],
+                key=lambda m: m.saml_name or "",
+            )
+
+        for mapping in mappings_qs:
             try:
                 mapping: SAMLPropertyMapping
                 value = mapping.evaluate(
@@ -310,9 +337,12 @@ class AssertionProcessor:
         assertion.attrib["IssueInstant"] = self._issue_instant
         assertion.append(self.get_issuer())
 
-        if self.provider.signing_kp and self.provider.sign_assertion:
+        signing_kp = resolve_signing_kp(self.provider)
+        signature_alg = resolve_signature_algorithm(self.provider)
+
+        if signing_kp and self.provider.sign_assertion:
             sign_algorithm_transform = SIGN_ALGORITHM_TRANSFORM_MAP.get(
-                self.provider.signature_algorithm, xmlsec.constants.TransformRsaSha1
+                signature_alg, xmlsec.constants.TransformRsaSha1
             )
             signature = xmlsec.template.create(
                 assertion,
@@ -325,7 +355,6 @@ class AssertionProcessor:
         assertion.append(self.get_assertion_subject())
         assertion.append(self.get_assertion_conditions())
         assertion.append(self.get_assertion_auth_n_statement())
-
         assertion.append(self.get_attributes())
         return assertion
 
@@ -334,7 +363,6 @@ class AssertionProcessor:
         response = Element(f"{{{NS_SAML_PROTOCOL}}}Response", nsmap=NS_MAP)
         response.attrib["Version"] = "2.0"
         response.attrib["IssueInstant"] = self._issue_instant
-        #        response.attrib["Destination"] = self.provider.acs_url
         response.attrib["Destination"] = self.auth_n_request.acs_url
         response.attrib["ID"] = self._response_id
         if self.auth_n_request.id:
@@ -342,9 +370,12 @@ class AssertionProcessor:
 
         response.append(self.get_issuer())
 
-        if self.provider.signing_kp and self.provider.sign_response:
+        signing_kp = resolve_signing_kp(self.provider)
+        signature_alg = resolve_signature_algorithm(self.provider)
+
+        if signing_kp and self.provider.sign_response:
             sign_algorithm_transform = SIGN_ALGORITHM_TRANSFORM_MAP.get(
-                self.provider.signature_algorithm, xmlsec.constants.TransformRsaSha1
+                signature_alg, xmlsec.constants.TransformRsaSha1
             )
             signature = xmlsec.template.create(
                 response,
@@ -363,11 +394,20 @@ class AssertionProcessor:
 
     def _sign(self, element: Element):
         """Sign an XML element based on the providers' configured signing settings"""
+        signing_kp = resolve_signing_kp(self.provider)
+        if not signing_kp:
+            raise InvalidSignature()
+
+        digest_alg = resolve_digest_algorithm(self.provider)
+        sig_alg = resolve_signature_algorithm(self.provider)
+
         digest_algorithm_transform = DIGEST_ALGORITHM_TRANSLATION_MAP.get(
-            self.provider.digest_algorithm, xmlsec.constants.TransformSha1
+            digest_alg, xmlsec.constants.TransformSha1
         )
+
         xmlsec.tree.add_ids(element, ["ID"])
         signature_node = xmlsec.tree.find_node(element, xmlsec.constants.NodeSignature)
+
         ref = xmlsec.template.add_reference(
             signature_node,
             digest_algorithm_transform,
@@ -381,12 +421,12 @@ class AssertionProcessor:
         ctx = xmlsec.SignatureContext()
 
         key = xmlsec.Key.from_memory(
-            self.provider.signing_kp.key_data,
+            signing_kp.key_data,
             xmlsec.constants.KeyDataFormatPem,
             None,
         )
         key.load_cert_from_memory(
-            self.provider.signing_kp.certificate_data,
+            signing_kp.certificate_data,
             xmlsec.constants.KeyDataFormatCertPem,
         )
         ctx.key = key
@@ -397,19 +437,19 @@ class AssertionProcessor:
 
     def _encrypt(self, element: Element, parent: Element):
         """Encrypt SAMLResponse EncryptedAssertion Element"""
-        # Create a standalone copy so namespace declarations are included in the encrypted content
+        encryption_kp = resolve_encryption_kp(self.provider)
+        if not encryption_kp:
+            raise InvalidEncryption()
+
         element_xml = etree.tostring(element)
         standalone_element = etree.fromstring(element_xml)
-
-        # Remove the original element from the tree since we're replacing it with encrypted version
         parent.remove(element)
 
         manager = xmlsec.KeysManager()
         key = xmlsec.Key.from_memory(
-            self.provider.encryption_kp.certificate_data,
+            encryption_kp.certificate_data,
             xmlsec.constants.KeyDataFormatCertPem,
         )
-
         manager.add_key(key)
         encryption_context = xmlsec.EncryptionContext(manager)
         encryption_context.key = xmlsec.Key.generate(
@@ -431,18 +471,22 @@ class AssertionProcessor:
             raise InvalidEncryption() from exc
 
         container.append(enc_data)
-
     def build_response(self) -> str:
         """Build string XML Response and sign if signing is enabled."""
         root_response = self.get_response()
-        if self.provider.signing_kp:
+
+        signing_kp = resolve_signing_kp(self.provider)
+        if signing_kp:
             if self.provider.sign_assertion:
                 assertion = root_response.xpath("//saml:Assertion", namespaces=NS_MAP)[0]
                 self._sign(assertion)
             if self.provider.sign_response:
                 response = root_response.xpath("//samlp:Response", namespaces=NS_MAP)[0]
                 self._sign(response)
-        if self.provider.encryption_kp:
+
+        encryption_kp = resolve_encryption_kp(self.provider)
+        if encryption_kp:
             assertion = root_response.xpath("//saml:Assertion", namespaces=NS_MAP)[0]
             self._encrypt(assertion, root_response)
+
         return etree.tostring(root_response).decode("utf-8")  # nosec

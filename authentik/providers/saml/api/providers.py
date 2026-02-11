@@ -4,6 +4,7 @@ from copy import copy
 from xml.etree.ElementTree import ParseError  # nosec
 
 from defusedxml.ElementTree import fromstring
+from django.db import transaction
 from django.http import HttpRequest
 from django.http.response import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
@@ -12,8 +13,16 @@ from django.utils.translation import gettext_lazy as _
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from guardian.shortcuts import get_objects_for_user
+from rest_framework import status
 from rest_framework.decorators import action
-from rest_framework.fields import CharField, FileField, SerializerMethodField
+from rest_framework.fields import (
+    BooleanField,
+    CharField,
+    FileField,
+    ListField,
+    SerializerMethodField,
+    UUIDField,
+)
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.renderers import BaseRenderer, JSONRenderer
@@ -38,10 +47,7 @@ from authentik.providers.saml.processors.assertion import AssertionProcessor
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequest
 from authentik.providers.saml.processors.metadata import MetadataProcessor
 from authentik.providers.saml.processors.metadata_parser import ServiceProviderMetadataParser
-from authentik.providers.saml.utils.certrefs import (
-    sync_saml_provider_cert_refs,
-    sync_saml_sp_cert_refs,
-)
+from authentik.providers.saml.utils.certrefs import sync_saml_provider_cert_refs
 from authentik.rbac.decorators import permission_required
 from authentik.sources.saml.processors.constants import SAML_BINDING_POST, SAML_BINDING_REDIRECT
 
@@ -68,6 +74,7 @@ class SAMLProviderSerializer(ProviderSerializer):
     url_sso_init = SerializerMethodField()
     url_slo_post = SerializerMethodField()
     url_slo_redirect = SerializerMethodField()
+    strict_acs_url = BooleanField(required=False)
 
     def create(self, validated_data):
         instance: SAMLProvider = super().create(validated_data)
@@ -229,6 +236,7 @@ class SAMLProviderSerializer(ProviderSerializer):
             "url_sso_init",
             "url_slo_post",
             "url_slo_redirect",
+            "strict_acs_url",
         ]
         extra_kwargs = ProviderSerializer.Meta.extra_kwargs
 
@@ -412,52 +420,3 @@ class SAMLProviderViewSet(UsedByMixin, ModelViewSet):
             instance={"preview": {"attributes": data, "nameID": name_id.text}}
         )
         return Response(serializer.data)
-
-
-class SAMLSPSerializer(ModelSerializer):
-
-    def create(self, validated_data):
-        instance: SAMLSP = super().create(validated_data)
-        sync_saml_sp_cert_refs(instance)
-        return instance
-
-    def update(self, instance, validated_data):
-        instance: SAMLSP = super().update(instance, validated_data)
-        sync_saml_sp_cert_refs(instance)
-        return instance
-
-    class Meta:
-        model = SAMLSP
-        fields = [
-            "pk",
-            "uuid",
-            "name",
-            "provider",
-            "entity_id",
-            "enabled",
-            "acs_url",
-            "sp_binding",
-            "sls_url",
-            "sls_binding",
-            "authn_requests_signed",
-            "want_assertions_signed",
-            "name_id_policy",
-            "verification_kp",
-            "created",
-            "last_updated",
-        ]
-        read_only_fields = ["pk", "uuid", "created", "last_updated"]
-
-
-class SAMLSPViewSet(UsedByMixin, ModelViewSet):
-    queryset = SAMLSP.objects.all()
-    serializer_class = SAMLSPSerializer
-    filterset_fields = [
-        "provider",
-        "enabled",
-        "entity_id",
-        "name",
-    ]
-
-    ordering = ["provider", "name", "entity_id"]
-    search_fields = ["name", "entity_id"]

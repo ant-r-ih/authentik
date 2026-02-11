@@ -192,6 +192,9 @@ class ManageableBackend(Backend):
         """
         raise NotImplementedError
 
+    def open_file_stream(self, name: str, mode: str = "rb") -> Iterator:
+        raise NotImplementedError
+
     def _cache_get_or_set(
         self,
         name: str,

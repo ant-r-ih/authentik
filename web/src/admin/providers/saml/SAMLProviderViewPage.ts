@@ -1,6 +1,7 @@
 import "#admin/providers/RelatedApplicationButton";
 import "#admin/providers/saml/SAMLProviderForm";
 import "#admin/rbac/ObjectPermissionsPage";
+import "#admin/providers/saml/SAMLProviderSPTab";
 import "#components/events/ObjectChangelog";
 import "#elements/CodeMirror";
 import "#elements/EmptyState";
@@ -240,6 +241,15 @@ export class SAMLProviderViewPage extends AKElement {
                     ${this.renderTabOverview()}
                 </div>
                 ${this.renderTabMetadata()}
+                <div
+                    role="tabpanel"
+                    tabindex="0"
+                    slot="page-service-providers"
+                    id="page-service-providers"
+                    aria-label="${msg("Service Providers")}"
+                >
+                    ${this.renderTabServiceProviders()}
+                </div>
                 <div
                     role="tabpanel"
                     tabindex="0"
@@ -621,6 +631,24 @@ export class SAMLProviderViewPage extends AKElement {
                 </div>
             </div>
         </div>`;
+    }
+    renderTabServiceProviders(): SlottedTemplateResult {
+        if (!this.provider) {
+            return nothing;
+        }
+
+        return html`
+            <div class="pf-c-page__main-section pf-m-no-padding-mobile pf-l-grid pf-m-gutter">
+                <div class="pf-c-card pf-l-grid__item pf-m-12-col">
+                    <div class="pf-c-card__title">${msg("Service Providers")}</div>
+                    <div class="pf-c-card__body">
+                        <ak-provider-saml-sp-tab
+                            .provider=${this.provider}
+                        ></ak-provider-saml-sp-tab>
+                    </div>
+                </div>
+            </div>
+        `;
     }
 }
 

@@ -8,7 +8,7 @@ from django.http import Http404, HttpRequest, HttpResponse
 from django.http.response import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.decorators import method_decorator
-from django.utils.http import urlencode
+from django.utils.http import url_has_allowed_host_and_scheme, urlencode
 from django.utils.translation import gettext as _
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
@@ -101,8 +101,24 @@ class InitiateView(View):
         source: SAMLSource = get_object_or_404(SAMLSource, slug=source_slug)
         if not source.enabled:
             raise Http404
-        relay_state = request.GET.get("next", "")
-        auth_n_req = RequestProcessor(source, request, relay_state)
+
+        target = request.GET.get("target")
+        if target:
+            if not url_has_allowed_host_and_scheme(
+                url=target,
+                allowed_hosts={request.get_host()},
+                require_https=request.is_secure(),
+            ):
+                return bad_request_message(request, "Invalid target")
+            relay_state = target
+        else:
+            relay_state = request.GET.get("next", "")
+
+        try:
+            auth_n_req = RequestProcessor(source, request, relay_state)
+        except ValueError as exc:
+            return bad_request_message(request, str(exc))
+
         # If the source is configured for Redirect bindings, we can just redirect there
         if source.binding_type == SAMLBindingTypes.REDIRECT:
             # Parse the initial SSO URL

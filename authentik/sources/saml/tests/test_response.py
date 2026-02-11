@@ -1,16 +1,22 @@
 """SAML Source tests"""
 
 from base64 import b64encode
+from base64 import b64decode
 
 from django.test import TestCase
+from defusedxml.lxml import fromstring
 
 from authentik.core.tests.utils import RequestFactory, create_test_cert, create_test_flow
 from authentik.crypto.models import CertificateKeyPair
 from authentik.lib.generators import generate_id
 from authentik.lib.tests.utils import load_fixture
-from authentik.sources.saml.exceptions import InvalidEncryption, InvalidSignature
-from authentik.sources.saml.models import SAMLSource
-from authentik.sources.saml.processors.response import ResponseProcessor
+from authentik.sources.saml.exceptions import (
+    InvalidEncryption,
+    InvalidSignature,
+    MismatchedRequestID,
+)
+from authentik.sources.saml.models import SAMLIDP, SAMLSource
+from authentik.sources.saml.processors.response import ResponseProcessor, _peek_issuer_lxml
 
 
 class TestResponseProcessor(TestCase):
@@ -221,3 +227,76 @@ class TestResponseProcessor(TestCase):
 
         with self.assertRaisesMessage(InvalidSignature, ""):
             parser.parse()
+    def _create_enabled_idp(self, **overrides) -> SAMLIDP:
+        """IdP creation helper."""
+        defaults = {
+            "source": self.source,
+            "name": "idp1",
+            "entity_id": "https://accounts.google.com/o/saml2?idpid=",
+            "enabled": True,
+            "sso_url": "https://idp.example/sso",
+            "slo_url": None,
+        }
+        defaults.update(overrides)
+        return SAMLIDP.objects.create(**defaults)
+
+    def test_idp_overrides_signed_response_flag(self):
+        """IdP's signed_response override Source's one"""
+        key = load_fixture("fixtures/signature_cert.pem")
+        kp = CertificateKeyPair.objects.create(name=generate_id(), certificate_data=key)
+
+        self.source.verification_kp = None
+        self.source.signed_response = False
+        self.source.signed_assertion = False
+        self.source.save()
+
+        self._create_enabled_idp(
+            verification_kp=kp,
+            signed_response=True,
+            signed_assertion=False,
+        )
+
+        request = self.factory.post(
+            "/",
+            data={
+                "SAMLResponse": b64encode(
+                    load_fixture("fixtures/response_signed_response.xml").encode()
+                ).decode()
+            },
+        )
+        ResponseProcessor(self.source, request).parse()
+
+    def test_idp_overrides_encryption_kp(self):
+        """IdP's encryption_kp override Source's one"""
+        key = load_fixture("fixtures/encrypted-key.pem")
+        kp = CertificateKeyPair.objects.create(name=generate_id(), key_data=key)
+
+        self.source.encryption_kp = None
+        self.source.save()
+
+        self._create_enabled_idp(encryption_kp=kp)
+
+        request = self.factory.post(
+            "/",
+            data={
+                "SAMLResponse": b64encode(
+                    load_fixture("fixtures/response_encrypted.xml").encode()
+                ).decode()
+            },
+        )
+        ResponseProcessor(self.source, request).parse()
+
+    def test_idp_overrides_allow_idp_initiated(self):
+        """IdP's allow_idp_initiated override Source's one"""
+        self._create_enabled_idp(allow_idp_initiated=False)
+
+        request = self.factory.post(
+            "/",
+            data={
+                "SAMLResponse": b64encode(
+                    load_fixture("fixtures/response_success.xml").encode()
+                ).decode()
+            },
+        )
+        with self.assertRaises(MismatchedRequestID):
+            ResponseProcessor(self.source, request).parse()

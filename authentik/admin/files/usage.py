@@ -6,7 +6,7 @@ class FileApiUsage(StrEnum):
     """Usage types for file API"""
 
     MEDIA = "media"
-
+    SAML_METADATA = "saml_metadata"
 
 class FileManagedUsage(StrEnum):
     """Usage types for managed files"""

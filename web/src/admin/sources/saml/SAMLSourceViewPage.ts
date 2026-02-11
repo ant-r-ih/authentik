@@ -1,6 +1,8 @@
 import "#admin/policies/BoundPoliciesList";
 import "#admin/rbac/ObjectPermissionsPage";
 import "#admin/sources/saml/SAMLSourceForm";
+import "#admin/providers/saml/SAMLSPSnapshotImport";
+import "#admin/sources/saml/SAMLSourceIDPTab";
 import "#components/events/ObjectChangelog";
 import "#elements/CodeMirror";
 import "#elements/Tabs";
@@ -216,6 +218,24 @@ export class SAMLSourceViewPage extends AKElement {
                         </div>
                     </div>
                 </div>
+<div
+    role="tabpanel"
+    tabindex="0"
+    slot="page-import"
+    id="page-import"
+    aria-label="${msg("Import")}"
+    class="pf-c-page__main-section pf-m-no-padding-mobile"
+>
+    <div class="pf-l-grid pf-m-gutter">
+        <div class="pf-c-card pf-l-grid__item pf-m-12-col">
+            <div class="pf-c-card__body">
+                <ak-source-saml-idp-tab
+                    .source=${this.source}
+                ></ak-source-saml-idp-tab>
+            </div>
+        </div>
+    </div>
+</div>
                 <div
                     role="tabpanel"
                     tabindex="0"

@@ -1,0 +1,1264 @@
+// authentik/web/src/admin/providers/saml/SAMLSPSnapshotImport.ts
+//
+// Common SnapshotImport for SAML SP/IdP (kind switch).
+// SP works today. IdP paths are TODO until backend endpoints exist.
+//
+// Policy (updated):
+// - "Local settings" opens an inline editor panel (no overlay modal)
+// - Panel Save => immediate PATCH to DB (inside panel component)
+// - Panel Cancel/Close => no DB change
+// - SnapshotImport no longer stages DB-local settings for Apply
+// - SnapshotImport still manages preview/import/delete staging
+
+import { customElement, property, state } from "lit/decorators.js";
+import { html, nothing, type TemplateResult } from "lit";
+import { msg } from "@lit/localize";
+
+import { createRef, ref } from "lit/directives/ref.js";
+
+import "#elements/buttons/SpinnerButton/index";
+import "#components/ak-file-search-input";
+import "#admin/providers/saml/SAMLSPDbLocalSettingsModal";
+import "#admin/sources/saml/SAMLIDPDbLocalSettingsModal";
+
+import { Form } from "#elements/forms/Form";
+import { showMessage } from "#elements/messages/MessageContainer";
+import { MessageLevel } from "#common/messages";
+import { DEFAULT_CONFIG } from "#common/api/config";
+
+import { AdminFileListUsageEnum, ProvidersApi, SourcesApi } from "@goauthentik/api";
+
+async function readErrorBody(res: Response): Promise<string> {
+    const ct = res.headers.get("content-type") ?? "";
+    try {
+        if (ct.includes("application/json")) {
+            const j = await res.json();
+            return JSON.stringify(j);
+        }
+        return await res.text();
+    } catch {
+        return await res.text().catch(() => "(failed to read body)");
+    }
+}
+
+function getCookie(name: string): string | null {
+    const m = document.cookie.match(new RegExp("(^|; )" + name + "=([^;]*)"));
+    return m ? decodeURIComponent(m[2]) : null;
+}
+
+function getCSRFToken(): string | null {
+    return getCookie("authentik_csrf") ?? getCookie("csrftoken");
+}
+
+type CatalogState = "unknown" | "new" | "unchanged" | "updated";
+type RowKind = "db" | "preview";
+type PlannedAction = "none" | "import" | "delete";
+type Kind = "sp" | "idp";
+
+type SAMLSPImportLocalSettings = {
+    propertyMappingsOverride?: boolean;
+    propertyMappings?: string[]; // mapping pk[]
+};
+
+type RowLocalSettingsSummary =
+    | { mode: "inherit" }
+    | { mode: "none" }
+    | { mode: "set"; count: number };
+
+type SAMLMetadataCatalogItem = {
+    entity_id: string;
+    kind?: string[];
+    display_name?: string | null;
+    container_name_chain?: string[];
+    states?: {
+        metadata?: CatalogState;
+        metadata_hash?: string;
+        runtime?: string;
+    };
+};
+
+type CatalogEntityResponse = {
+    entity_id: string;
+    xml: string;
+    container_name_chain?: string[];
+};
+
+// unified managed-list row (DB)
+type ManagedItem = {
+    uuid: string;
+    entity_id: string;
+    name?: string | null;
+    property_mappings_override?: boolean;
+    property_mappings?: string[];
+
+    verification_kp_mode?: string | null;
+    encryption_kp_mode?: string | null;
+    signing_kp_mode?: string | null;
+};
+
+type Row = {
+    kind: RowKind;
+    key: string;
+    uuid?: string;
+    entity_id?: string;
+    label: string;
+    entityIdText: string;
+    current: CatalogState | "db";
+
+    propertyMappingsOverride?: boolean;
+    propertyMappings?: string[];
+
+    verificationKpMode?: string | null;
+    encryptionKpMode?: string | null;
+    signingKpMode?: string | null;
+};
+
+type SPLocalSettingsSavedDetail = {
+    spUuid: string;
+    applied: {
+        propertyMappingsOverride: boolean;
+        propertyMappings: string[];
+
+        // true = inherit provider behavior
+        // false = force-disable for this SP
+        verificationKeyEnabled: boolean;
+        encryptionKeyEnabled: boolean;
+        signingKeyEnabled: boolean;
+    };
+};
+
+type IDPLocalSettingsSavedDetail = {
+    idpUuid: string;
+    applied: {
+        verificationKeyEnabled: boolean;
+       encryptionKeyEnabled: boolean;
+        signingKeyEnabled: boolean;
+    };
+};
+
+function apiBasePath(): string {
+    return (DEFAULT_CONFIG.basePath ?? "/api/v3").replace(/\/$/, "");
+}
+
+async function catalogPreviewByName(kind: Kind, owner: string, metadataName: string) {
+    const url = new URL(`${apiBasePath()}/providers/saml/catalog/preview/`, window.location.origin);
+
+    if (kind === "sp") url.searchParams.set("provider", owner);
+    if (kind === "idp") url.searchParams.set("source", owner); // TODO: implement backend
+    url.searchParams.set("kind", kind);
+
+    const csrf = getCSRFToken();
+    const res = await fetch(url.toString(), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "X-authentik-CSRF": csrf! },
+        body: JSON.stringify({ metadata_name: metadataName }),
+    });
+    if (!res.ok) throw new Error(`Catalog preview failed (${res.status}): ${await readErrorBody(res)}`);
+    return (await res.json()) as SAMLMetadataCatalogItem[];
+}
+
+async function catalogGetEntityByName(kind: Kind, owner: string, metadataName: string, entityId: string) {
+    const url = new URL(`${apiBasePath()}/providers/saml/catalog/entity/`, window.location.origin);
+
+    if (kind === "sp") url.searchParams.set("provider", owner);
+    if (kind === "idp") url.searchParams.set("source", owner); // TODO: implement backend
+
+    const csrf = getCSRFToken();
+    const res = await fetch(url.toString(), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "X-authentik-CSRF": csrf! },
+        body: JSON.stringify({ metadata_name: metadataName, entity_id: entityId }),
+    });
+    if (!res.ok) throw new Error(`Catalog entity failed (${res.status}): ${await readErrorBody(res)}`);
+    return (await res.json()) as CatalogEntityResponse;
+}
+
+async function importSingleEntity(
+    kind: Kind,
+    ownerPk: number,
+    entityDescriptorXml: string,
+    localSettings?: SAMLSPImportLocalSettings,
+): Promise<void> {
+    const basePath = apiBasePath();
+
+    const url =
+        kind === "sp"
+            ? new URL(`${basePath}/providers/samlsp/import/`, window.location.origin)
+            : new URL(`${basePath}/sources/samlidp/import/`, window.location.origin); // TODO: create backend
+
+    const csrf = getCSRFToken();
+    if (!csrf) throw new Error("CSRF cookie missing.");
+
+    const body =
+        kind === "sp"
+            ? {
+                  provider: ownerPk,
+                  entity_xml: entityDescriptorXml,
+                  ...(localSettings ?? {}),
+              }
+            : { source: ownerPk, entity_xml: entityDescriptorXml }; // TODO: align backend
+
+    const res = await fetch(url.toString(), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "X-authentik-CSRF": csrf },
+        body: JSON.stringify(body),
+    });
+
+    if (!res.ok) throw new Error(`Import failed (${res.status}): ${await readErrorBody(res)}`);
+}
+
+// SP works now. IdP bulk delete endpoint is TODO.
+async function bulkDelete(kind: Kind, ownerPk: number, uuids: string[]): Promise<void> {
+    const basePath = apiBasePath();
+
+    const url =
+        kind === "sp"
+            ? new URL(`${basePath}/providers/samlsp/bulk-delete/`, window.location.origin)
+            : new URL(`${basePath}/sources/samlidp/bulk-delete/`, window.location.origin); // TODO
+
+    const csrf = getCSRFToken();
+    if (!csrf) throw new Error("CSRF cookie missing.");
+
+    const body = kind === "sp" ? { provider: ownerPk, uuids } : { source: ownerPk, uuids };
+
+    const res = await fetch(url.toString(), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "X-authentik-CSRF": csrf },
+        body: JSON.stringify(body),
+    });
+
+    if (!res.ok) throw new Error(`Bulk delete failed (${res.status}): ${await readErrorBody(res)}`);
+}
+
+function chunk<T>(arr: T[], size: number): T[][] {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+}
+
+@customElement("ak-saml-snapshot-import")
+export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
+    /** "sp" or "idp" */
+    @property({ type: String })
+    kind: Kind = "sp";
+
+    /**
+     * Owner object:
+     * - SP: provider.pk (number) and provider name for labels
+     * - IdP: source.pk (number) and source name for labels
+     */
+    @property({ type: Number })
+    ownerPk!: number;
+
+    @property({ type: String })
+    ownerLabel = "SAML";
+
+    // Selected metadata file from authentik Files (usage=SAML_METADATA)
+    @state()
+    private metadataName: string | null = null;
+
+    @state()
+    private rows: Row[] = [];
+
+    @state()
+    private selectedKeys: string[] = [];
+
+    @state()
+    private plannedByKey: Record<string, PlannedAction> = {};
+
+    @state()
+    private previewLoading = false;
+
+    @state()
+    private dbLoading = false;
+
+    @state()
+    private actionLoading = false;
+
+    @state()
+    private previewError: string | null = null;
+
+    @state()
+    private search = "";
+
+    // Progress UI
+    @state()
+    private progressOpen = false;
+    @state()
+    private progressLabel = "";
+    @state()
+    private progressDone = 0;
+    @state()
+    private progressTotal = 0;
+
+    // preview row key -> staged local settings (SP import only; currently UI-hidden)
+    @state()
+    private plannedLocalSettingsByKey: Record<string, SAMLSPImportLocalSettings> = {};
+
+    // local settings panel state (DB-only immediate save)
+    @state()
+    private localSettingsOpen = false;
+
+    @state()
+    private localSettingsRowKey: string | null = null;
+
+    private selectAllRef = createRef<HTMLInputElement>();
+
+    private isSelected(key: string): boolean {
+        return this.selectedKeys.includes(key);
+    }
+
+    private toggleKey(key: string, checked: boolean) {
+        const cur = new Set(this.selectedKeys);
+        if (checked) cur.add(key);
+        else cur.delete(key);
+        this.selectedKeys = Array.from(cur);
+    }
+
+    private toggleSelectAll(visibleKeys: string[], checked: boolean) {
+        const cur = new Set(this.selectedKeys);
+        if (checked) for (const k of visibleKeys) cur.add(k);
+        else for (const k of visibleKeys) cur.delete(k);
+        this.selectedKeys = Array.from(cur);
+    }
+
+    private getFilterQuery(): string {
+        return (this.search ?? "").toLowerCase().trim();
+    }
+
+    private getVisibleRows(): Row[] {
+        const q = this.getFilterQuery();
+        if (!q) return this.rows;
+        return this.rows.filter((r) => {
+            const label = (r.label ?? "").toLowerCase();
+            const eid = (r.entityIdText ?? "").toLowerCase();
+            return label.includes(q) || eid.includes(q);
+        });
+    }
+
+    private countSelected(kind: RowKind): number {
+        if (!this.selectedKeys.length) return 0;
+        const prefix = kind === "db" ? "db:" : "preview:";
+        return this.selectedKeys.filter((k) => k.startsWith(prefix)).length;
+    }
+
+    private plannedActionFor(key: string): PlannedAction {
+        return this.plannedByKey[key] ?? "none";
+    }
+
+    private plannedCount(action: PlannedAction): number {
+        return Object.entries(this.plannedByKey).filter(([, v]) => v === action).length;
+    }
+
+    private renderCurrentBadge(row: Row): TemplateResult {
+        return html`
+            <span
+                class="pf-c-label pf-m-outline"
+                style="white-space:nowrap; display:inline-flex; align-items:center;"
+            >
+                <span class="pf-c-label__content">${row.current}</span>
+            </span>
+        `;
+    }
+
+    private renderPlannedBadge(key: string): TemplateResult {
+        const p = this.plannedActionFor(key);
+        if (p === "none") {
+            return html`
+                <span
+                    class="pf-c-label pf-m-outline"
+                    style="white-space:nowrap; display:inline-flex; align-items:center;"
+                >
+                    <span class="pf-c-label__content">—</span>
+                </span>
+            `;
+        }
+        const klass = p === "import" ? "pf-m-green" : "pf-m-red";
+        const text = p === "import" ? msg("Import") : msg("Delete");
+        return html`
+            <span
+                class="pf-c-label ${klass}"
+                style="white-space:nowrap; display:inline-flex; align-items:center;"
+            >
+                <span class="pf-c-label__content">${text}</span>
+            </span>
+        `;
+    }
+
+    private toDbRows(items: ManagedItem[]): Row[] {
+        return items.map((it) => ({
+            kind: "db",
+            key: `db:${it.uuid}`,
+            uuid: it.uuid,
+            label: String(it.name ?? it.entity_id ?? it.uuid),
+            entityIdText: String(it.entity_id ?? ""),
+            current: "db",
+
+            propertyMappingsOverride: !!it.property_mappings_override,
+            propertyMappings: Array.isArray(it.property_mappings) ? it.property_mappings.map(String) : [],
+
+            verificationKpMode: it.verification_kp_mode ? String(it.verification_kp_mode) : null,
+            encryptionKpMode: it.encryption_kp_mode ? String(it.encryption_kp_mode) : null,
+            signingKpMode: it.signing_kp_mode ? String(it.signing_kp_mode) : null,
+        }));
+    }
+
+    private toPreviewRows(items: SAMLMetadataCatalogItem[]): Row[] {
+        return items
+            .filter((it) => (it.kind ?? []).includes(this.kind))
+            .map((it) => {
+                const entityId = String(it.entity_id);
+                const label = String(it.display_name ?? it.entity_id);
+                const current = (it.states?.metadata ?? "unknown") as CatalogState;
+
+                return {
+                    kind: "preview",
+                    key: `preview:${entityId}`,
+                    entity_id: entityId,
+                    label,
+                    entityIdText: entityId,
+                    current,
+                };
+            });
+    }
+
+    private pruneSelectionAndPlan(): void {
+        const validKeys = new Set(this.rows.map((r) => r.key));
+        this.selectedKeys = this.selectedKeys.filter((k) => validKeys.has(k));
+
+        const nextPlanned: Record<string, PlannedAction> = {};
+        for (const [k, v] of Object.entries(this.plannedByKey)) {
+            if (validKeys.has(k) && v !== "none") nextPlanned[k] = v;
+        }
+        this.plannedByKey = nextPlanned;
+
+        this.pruneLocalSettings();
+    }
+
+    /**
+     * UX rule:
+     * - Local settings are editable only in DB editing mode (existing DB rows)
+     * - Metadata preview rows never show local settings controls
+     */
+    private canEditLocalSettings(row: Row): boolean {
+        if (row.kind !== "db") return false;
+        return !!row.uuid;
+    }
+
+    private getRowLocalSettingsSummary(row: Row): RowLocalSettingsSummary {
+        // PM override UI is SP-only. IdP has no PM override panel.
+        if (this.kind !== "sp") return { mode: "inherit" };
+
+        if (!this.canEditLocalSettings(row)) return { mode: "inherit" };
+
+        const effectiveOverride = row.propertyMappingsOverride ?? false;
+        const effectiveMappings = row.propertyMappings ?? [];
+
+        if (!effectiveOverride) return { mode: "inherit" };
+        if (effectiveMappings.length === 0) return { mode: "none" };
+        return { mode: "set", count: effectiveMappings.length };
+    }
+
+    private renderLocalSettingsBadge(row: Row): TemplateResult {
+        if (!this.canEditLocalSettings(row)) return html``;
+        // badge is SP-only for now (PropertyMappings summary)
+        if (this.kind !== "sp") return html``;
+
+        const summary = this.getRowLocalSettingsSummary(row);
+
+        if (summary.mode === "inherit") {
+            return html`
+                <span class="pf-c-label pf-m-outline" style="white-space:nowrap;">
+                    <span class="pf-c-label__content">${msg("PM: inherit")}</span>
+                </span>
+            `;
+        }
+        if (summary.mode === "none") {
+            return html`
+                <span class="pf-c-label pf-m-orange" style="white-space:nowrap;">
+                    <span class="pf-c-label__content">${msg("PM: none")}</span>
+                </span>
+            `;
+        }
+        return html`
+            <span class="pf-c-label pf-m-blue" style="white-space:nowrap;">
+                <span class="pf-c-label__content">${msg("PM")}: ${summary.count}</span>
+            </span>
+        `;
+    }
+
+    private closeLocalSettings(): void {
+        this.localSettingsOpen = false;
+        this.localSettingsRowKey = null;
+    }
+
+    private openLocalSettings(row: Row): void {
+        if (this.actionLoading) return;
+        if (!this.canEditLocalSettings(row)) return;
+
+        // toggle behavior (click same row closes)
+        if (this.localSettingsOpen && this.localSettingsRowKey === row.key) {
+            this.closeLocalSettings();
+            return;
+        }
+
+        this.localSettingsRowKey = row.key;
+        this.localSettingsOpen = true;
+    }
+
+    private pruneLocalSettings(): void {
+        // preview staged settings only (future use)
+        const validPreviewKeys = new Set(this.rows.filter((r) => r.kind === "preview").map((r) => r.key));
+        const nextPreview: Record<string, SAMLSPImportLocalSettings> = {};
+        for (const [k, v] of Object.entries(this.plannedLocalSettingsByKey)) {
+            if (validPreviewKeys.has(k)) nextPreview[k] = v;
+        }
+        this.plannedLocalSettingsByKey = nextPreview;
+
+        // if current panel target row disappeared, close panel
+        if (this.localSettingsRowKey) {
+            const exists = this.rows.some((r) => r.key === this.localSettingsRowKey);
+            if (!exists) this.closeLocalSettings();
+        }
+    }
+
+    private rowByKey(key: string | null): Row | undefined {
+        if (!key) return undefined;
+        return this.rows.find((r) => r.key === key);
+    }
+
+    // -------- DB list (managed list) --------
+    private async listManaged(): Promise<ManagedItem[]> {
+        if (this.kind === "sp") {
+            const api = new ProvidersApi(DEFAULT_CONFIG);
+            const all: ManagedItem[] = [];
+            let page = 1;
+
+            for (;;) {
+                const res = await api.providersSamlspList({
+                    provider: this.ownerPk,
+                    pageSize: 100,
+                    page,
+                });
+
+                for (const sp of res.results ?? []) {
+                    all.push({
+                        uuid: String((sp as any).uuid),
+                        entity_id: String((sp as any).entityId ?? (sp as any).entity_id ?? ""),
+                        name: String((sp as any).name ?? ""),
+                        property_mappings_override: !!(
+                            (sp as any).propertyMappingsOverride ??
+                            (sp as any).property_mappings_override
+                        ),
+                        property_mappings: Array.isArray((sp as any).propertyMappings)
+                            ? (sp as any).propertyMappings.map(String)
+                            : Array.isArray((sp as any).property_mappings)
+                              ? (sp as any).property_mappings.map(String)
+                              : [],
+                        // SP local settings (tri-state modes)
+                        verification_kp_mode: (sp as any).verificationKpMode ?? (sp as any).verification_kp_mode ?? null,
+                        encryption_kp_mode: (sp as any).encryptionKpMode ?? (sp as any).encryption_kp_mode ?? null,
+                        signing_kp_mode: (sp as any).signingKpMode ?? (sp as any).signing_kp_mode ?? null,
+                            });
+                }
+
+                const next = (res as any).pagination?.next as number | null | undefined;
+                if (!next) break;
+                page = next;
+            }
+            return all;
+        }
+
+        if (this.kind === "idp") {
+            const api = new SourcesApi(DEFAULT_CONFIG);
+            const all: ManagedItem[] = [];
+            let page = 1;
+
+            for (;;) {
+                const res = await api.sourcesSamlidpList({
+                    source: this.ownerPk,
+                    pageSize: 100,
+                    page,
+                });
+
+                for (const idp of res.results ?? []) {
+                    all.push({
+                        uuid: String((idp as any).uuid),
+                        entity_id: String((idp as any).entityId ?? (idp as any).entity_id ?? ""),
+                        name: String((idp as any).name ?? ""),
+                        property_mappings_override: !!(
+                            (idp as any).propertyMappingsOverride ??
+                            (idp as any).property_mappings_override
+                        ),
+                        property_mappings: Array.isArray((idp as any).propertyMappings)
+                            ? (idp as any).propertyMappings.map(String)
+                            : Array.isArray((idp as any).property_mappings)
+                              ? (idp as any).property_mappings.map(String)
+                              : [],
+                        // IdP local settings (tri-state modes)
+                        verification_kp_mode: (idp as any).verificationKpMode ?? (idp as any).verification_kp_mode ?? null,
+                        encryption_kp_mode: (idp as any).encryptionKpMode ?? (idp as any).encryption_kp_mode ?? null,
+                        signing_kp_mode: (idp as any).signingKpMode ?? (idp as any).signing_kp_mode ?? null,
+                            });
+                }
+
+                const next = (res as any).pagination?.next as number | null | undefined;
+                if (!next) break;
+                page = next;
+            }
+            return all;
+        }
+
+        return [];
+    }
+
+    private async loadDbRows(): Promise<void> {
+        if (!this.ownerPk) return;
+        this.dbLoading = true;
+        try {
+            const all = await this.listManaged();
+            const dbRows = this.toDbRows(all);
+            const previewRows = this.rows.filter((r) => r.kind === "preview");
+            this.rows = [...previewRows, ...dbRows];
+            this.pruneSelectionAndPlan();
+        } finally {
+            this.dbLoading = false;
+        }
+    }
+
+    private async loadPreviewRowsByName(metadataName: string): Promise<void> {
+        if (!this.ownerPk) return;
+
+        this.previewLoading = true;
+        this.previewError = null;
+
+        try {
+            const items = await catalogPreviewByName(this.kind, String(this.ownerPk), metadataName);
+            const previewRows = this.toPreviewRows(items);
+
+            const nextPlanned: Record<string, PlannedAction> = { ...this.plannedByKey };
+            for (const r of previewRows) {
+                if (r.current !== "new") nextPlanned[r.key] = "import";
+            }
+
+            const dbRows = this.rows.filter((r) => r.kind === "db");
+            this.rows = [...previewRows, ...dbRows];
+
+            this.plannedByKey = nextPlanned;
+            this.pruneSelectionAndPlan();
+        } catch (e) {
+            this.previewError = e instanceof Error ? e.message : String(e);
+            showMessage({ level: MessageLevel.error, message: msg("Failed to preview metadata.") });
+        } finally {
+            this.previewLoading = false;
+        }
+    }
+
+    private previewFromSelectedMetadata = async (): Promise<void> => {
+        if (!this.metadataName) {
+            showMessage({ level: MessageLevel.warning, message: msg("Select a metadata file.") });
+            return;
+        }
+        await this.loadPreviewRowsByName(this.metadataName);
+    };
+
+    private normEntityId(v: string): string {
+        return (v ?? "").trim().replace(/\/+$/, "");
+    }
+
+    private buildDbKeyByEntityId(): Map<string, string> {
+        const m = new Map<string, string>();
+        for (const r of this.rows) {
+            if (r.kind !== "db" || !r.uuid) continue;
+            const eid = this.normEntityId(String(r.entityIdText ?? ""));
+            if (!eid) continue;
+            m.set(eid, `db:${r.uuid}`);
+        }
+        return m;
+    }
+
+    private countSelectedDeletable(): number {
+        if (!this.selectedKeys.length) return 0;
+
+        const dbByEid = this.buildDbKeyByEntityId();
+        let n = 0;
+
+        for (const k of this.selectedKeys) {
+            if (k.startsWith("db:")) {
+                n += 1;
+                continue;
+            }
+            if (k.startsWith("preview:")) {
+                const eid = this.normEntityId(k.slice("preview:".length));
+                if (dbByEid.has(eid)) n += 1;
+            }
+        }
+        return n;
+    }
+
+    private stageSelected(action: PlannedAction): void {
+        if (!this.selectedKeys.length) {
+            showMessage({ level: MessageLevel.warning, message: msg("No rows selected.") });
+            return;
+        }
+
+        const nextPlanned: Record<string, PlannedAction> = { ...this.plannedByKey };
+        const dbByEid = this.buildDbKeyByEntityId();
+
+        for (const key of this.selectedKeys) {
+            const isPreview = key.startsWith("preview:");
+            const isDb = key.startsWith("db:");
+
+            if (action === "import") {
+                if (!isPreview) continue;
+                nextPlanned[key] = "import";
+                continue;
+            }
+
+            if (action === "delete") {
+                if (isDb) {
+                    nextPlanned[key] = "delete";
+                    continue;
+                }
+                if (isPreview) {
+                    const eid = this.normEntityId(key.slice("preview:".length));
+                    const dbKey = dbByEid.get(eid);
+                    if (dbKey) nextPlanned[dbKey] = "delete";
+                }
+                continue;
+            }
+
+            if (action === "none") {
+                if (isDb) delete nextPlanned[key];
+                if (isPreview) {
+                    delete nextPlanned[key];
+                    const eid = this.normEntityId(key.slice("preview:".length));
+                    const dbKey = dbByEid.get(eid);
+                    if (dbKey) delete nextPlanned[dbKey];
+                }
+            }
+        }
+
+        this.plannedByKey = nextPlanned;
+    }
+
+    private resetPlan(): void {
+        this.plannedByKey = {};
+        this.plannedLocalSettingsByKey = {};
+        showMessage({ level: MessageLevel.info, message: msg("Staged changes cleared.") });
+    }
+
+    private openProgress(label: string, total: number) {
+        this.progressOpen = true;
+        this.progressLabel = label;
+        this.progressDone = 0;
+        this.progressTotal = Math.max(0, total);
+    }
+
+    private bumpProgress(step = 1) {
+        this.progressDone = Math.min(this.progressTotal, this.progressDone + step);
+    }
+
+    private closeProgress() {
+        this.progressOpen = false;
+        this.progressLabel = "";
+        this.progressDone = 0;
+        this.progressTotal = 0;
+    }
+
+    private async applyChanges(): Promise<void> {
+        const plannedImportKeys = Object.entries(this.plannedByKey)
+            .filter(([k, v]) => v === "import" && k.startsWith("preview:"))
+            .map(([k]) => k);
+
+        const plannedDeleteKeys = Object.entries(this.plannedByKey)
+            .filter(([k, v]) => v === "delete" && k.startsWith("db:"))
+            .map(([k]) => k);
+
+        const entityIds = plannedImportKeys.map((k) => k.slice("preview:".length));
+        const uuids = plannedDeleteKeys.map((k) => k.slice("db:".length));
+
+        if (!entityIds.length && !uuids.length) {
+            showMessage({ level: MessageLevel.info, message: msg("No staged changes to apply.") });
+            return;
+        }
+
+        if (entityIds.length && !this.metadataName) {
+            showMessage({
+                level: MessageLevel.error,
+                message: msg("Select a metadata file before applying staged imports."),
+            });
+            return;
+        }
+
+        const totalSteps = entityIds.length + uuids.length;
+        this.actionLoading = true;
+        this.openProgress(msg("Applying changes…"), totalSteps);
+
+        try {
+            // 1) Imports from preview (metadata)
+            if (entityIds.length) {
+                for (const entityId of entityIds) {
+                    const ent = await catalogGetEntityByName(
+                        this.kind,
+                        String(this.ownerPk),
+                        this.metadataName!,
+                        entityId,
+                    );
+                    const rowKey = `preview:${entityId}`;
+                    const localSettings =
+                        this.kind === "sp" ? this.plannedLocalSettingsByKey[rowKey] : undefined;
+
+                    await importSingleEntity(this.kind, this.ownerPk, ent.xml, localSettings);
+
+                    this.bumpProgress(1);
+
+                    const nextPlanned = { ...this.plannedByKey };
+                    delete nextPlanned[rowKey];
+                    this.plannedByKey = nextPlanned;
+                }
+            }
+
+            // 2) Bulk delete DB rows
+            if (uuids.length) {
+                const chunks = chunk(uuids, 100);
+                for (const part of chunks) {
+                    await bulkDelete(this.kind, this.ownerPk, part);
+                    this.bumpProgress(part.length);
+                }
+
+                const nextPlanned = { ...this.plannedByKey };
+                for (const uuid of uuids) delete nextPlanned[`db:${uuid}`];
+                this.plannedByKey = nextPlanned;
+
+                this.rows = this.rows.filter((r) => !(r.kind === "db" && r.uuid && uuids.includes(r.uuid)));
+            }
+
+            showMessage({ level: MessageLevel.success, message: msg("Changes applied.") });
+            await this.loadDbRows();
+            this.dispatchEvent(new CustomEvent("ak-import-finished", { bubbles: true, composed: true }));
+        } catch (e) {
+            // eslint-disable-next-line no-console
+            console.error(e);
+            showMessage({ level: MessageLevel.error, message: msg("Failed to apply changes.") });
+        } finally {
+            this.actionLoading = false;
+            this.closeProgress();
+        }
+    }
+
+    public override async send(): Promise<void> {
+        await this.applyChanges();
+    }
+
+    public override async connectedCallback(): Promise<void> {
+        super.connectedCallback();
+        await this.loadDbRows();
+    }
+
+    private renderProgress(): TemplateResult {
+        if (!this.progressOpen || this.progressTotal <= 0) return nothing;
+        const pct = Math.round((this.progressDone / this.progressTotal) * 100);
+
+        return html`
+            <div class="pf-c-progress" style="margin: 8px 0;">
+                <div class="pf-c-progress__description">${this.progressLabel}</div>
+                <div class="pf-c-progress__status" aria-hidden="true">
+                    ${this.progressDone}/${this.progressTotal} (${pct}%)
+                </div>
+                <div
+                    class="pf-c-progress__bar"
+                    role="progressbar"
+                    aria-valuenow=${pct}
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                >
+                    <div class="pf-c-progress__indicator" style="width: ${pct}%"></div>
+                </div>
+            </div>
+        `;
+    }
+
+    private get activeLocalSettingsRow(): Row | undefined {
+        return this.rowByKey(this.localSettingsRowKey);
+    }
+
+    private onSPLocalSettingsSaved = (ev: CustomEvent<SPLocalSettingsSavedDetail>): void => {
+        ev.stopPropagation();
+
+        const { spUuid, applied } = ev.detail;
+
+        const toMode = (enabled: boolean) => (enabled ? "inherit" : "none");
+
+        // DB is already updated by panel PATCH, reflect immediately in UI row
+        this.rows = this.rows.map((r) => (r.kind === "db" && r.uuid === spUuid
+            ? {
+                  ...r,
+                  propertyMappingsOverride: applied.propertyMappingsOverride,
+                  propertyMappings: [...applied.propertyMappings],
+                  verificationKpMode: toMode(applied.verificationKeyEnabled),
+                  encryptionKpMode: toMode(applied.encryptionKeyEnabled),
+                  signingKpMode: toMode(applied.signingKeyEnabled),
+              }
+            : r));
+
+        this.closeLocalSettings();
+    };
+
+    private onIdpLocalSettingsSaved = (ev: CustomEvent<IDPLocalSettingsSavedDetail>): void => {
+        ev.stopPropagation();
+
+        const { idpUuid, applied } = ev.detail;
+
+        // DB is already updated by panel PATCH, reflect immediately in UI row (modes)
+        // UI semantics in IdP editor:
+        // - enabled=true  => mode="inherit"
+        // - enabled=false => mode="none"
+        const toMode = (enabled: boolean) => (enabled ? "inherit" : "none");
+
+        this.rows = this.rows.map((r) =>
+            r.kind === "db" && r.uuid === idpUuid
+                ? {
+                      ...r,
+                      verificationKpMode: toMode(applied.verificationKeyEnabled),
+                      encryptionKpMode: toMode(applied.encryptionKeyEnabled),
+                      signingKpMode: toMode(applied.signingKeyEnabled),
+                  }
+                : r,
+        );
+
+        this.closeLocalSettings();
+    };
+
+    private onLocalSettingsCancelled = (ev: Event): void => {
+        ev.stopPropagation();
+        this.closeLocalSettings();
+    };
+
+    public override renderForm(): TemplateResult {
+        const visible = this.getVisibleRows();
+
+        const visibleKeys = visible.map((r) => r.key);
+        const selectedVisibleCount = visibleKeys.filter((k) => this.isSelected(k)).length;
+
+        const allVisibleSelected = visibleKeys.length > 0 && selectedVisibleCount === visibleKeys.length;
+        const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
+
+        queueMicrotask(() => {
+            const el = this.selectAllRef.value;
+            if (el) el.indeterminate = someVisibleSelected;
+        });
+
+        const selectedPreview = this.countSelected("preview");
+        const selectedDb = this.countSelected("db");
+        const deletableSelected = this.countSelectedDeletable();
+
+        const stagedImport = this.plannedCount("import");
+        const stagedDelete = this.plannedCount("delete");
+
+        const canStageImport = !this.actionLoading && selectedPreview > 0;
+        const canStageDelete = !this.actionLoading && deletableSelected > 0;
+
+        return html`
+            <form class="pf-c-form pf-m-horizontal">
+                <div style="display:flex; flex-direction:column; gap: 8px; margin-bottom: 10px;">
+                    <div style="display:flex; gap: 8px; align-items:flex-end; flex-wrap: wrap;">
+                        <div style="flex: 1 1 420px; min-width: 280px;">
+                            <ak-file-search-input
+                                name="metadataName"
+                                label=${msg("Metadata file")}
+                                .usage=${AdminFileListUsageEnum.SamlMetadata}
+                                .value=${this.metadataName ?? ""}
+                                ?disabled=${this.actionLoading || this.previewLoading}
+                                @ak-change=${(ev: CustomEvent) => {
+                                    const v = (ev.detail?.value?.name ?? "").trim();
+                                    this.metadataName = v || null;
+                                    if (this.metadataName) void this.loadPreviewRowsByName(this.metadataName);
+                                }}
+                            ></ak-file-search-input>
+                        </div>
+
+                        <button
+                            type="button"
+                            class="pf-c-button pf-m-secondary"
+                            ?disabled=${this.actionLoading || this.previewLoading || !this.metadataName}
+                            @click=${this.previewFromSelectedMetadata}
+                        >
+                            ${msg("Preview")}
+                        </button>
+
+                        <button
+                            type="button"
+                            class="pf-c-button pf-m-primary"
+                            ?disabled=${!canStageImport}
+                            @click=${() => this.stageSelected("import")}
+                        >
+                            ${msg("Stage import")}
+                        </button>
+
+                        <button
+                            type="button"
+                            class="pf-c-button pf-m-danger"
+                            ?disabled=${!canStageDelete}
+                            @click=${() => this.stageSelected("delete")}
+                        >
+                            ${msg("Stage delete")}
+                        </button>
+
+                        <button
+                            type="button"
+                            class="pf-c-button pf-m-secondary"
+                            ?disabled=${this.actionLoading || stagedImport + stagedDelete === 0}
+                            @click=${this.resetPlan}
+                        >
+                            ${msg("Clear staged")}
+                        </button>
+
+                        <div style="margin-left:auto; font-size: 12px; opacity: 0.8; white-space: nowrap;">
+                            ${msg("Target")}: ${this.ownerLabel} · ${msg("Kind")}: ${this.kind.toUpperCase()}
+                        </div>
+                    </div>
+
+                    <div style="display:flex; gap: 10px; align-items:flex-end; flex-wrap: wrap;">
+                        <div class="pf-c-form__group" style="margin:0; flex: 1 1 420px; min-width: 280px;">
+                            <label class="pf-c-form__label">
+                                <span class="pf-c-form__label-text">${msg("Search")}</span>
+                            </label>
+                            <div class="pf-c-form__group-control">
+                                <input
+                                    class="pf-c-form-control"
+                                    type="search"
+                                    placeholder=${msg("Filter by name or entity ID…")}
+                                    .value=${this.search}
+                                    @input=${(ev: Event) => (this.search = (ev.target as HTMLInputElement).value)}
+                                />
+                            </div>
+                        </div>
+
+                        <label class="pf-c-check" style="display:flex; align-items:center; gap:8px; margin:0;">
+                            <input
+                                ${ref(this.selectAllRef)}
+                                class="pf-c-check__input"
+                                type="checkbox"
+                                .checked=${allVisibleSelected}
+                                ?disabled=${visibleKeys.length === 0}
+                                @change=${(ev: Event) => {
+                                    const checked = (ev.target as HTMLInputElement).checked;
+                                    this.toggleSelectAll(visibleKeys, checked);
+                                }}
+                            />
+                            <span class="pf-c-check__label">${msg("Select all (filtered)")}</span>
+                        </label>
+
+                        <div style="font-size: 12px; opacity: 0.85; white-space: nowrap;">
+                            ${msg("Selected")}: ${this.selectedKeys.length}
+                            (${msg("preview")}: ${selectedPreview}, ${msg("db")}: ${selectedDb})
+                            · ${msg("Staged")}: ${stagedImport + stagedDelete}
+                            (${msg("import")}: ${stagedImport}, ${msg("delete")}: ${stagedDelete})
+                        </div>
+                    </div>
+
+                    ${this.dbLoading || this.previewLoading ? html`<p style="margin:0;">${msg("Loading…")}</p>` : nothing}
+
+                    ${this.previewError
+                        ? html`
+                              <div class="pf-c-alert pf-m-danger" style="margin:0;">
+                                  <div class="pf-c-alert__title">${msg("Preview error")}</div>
+                                  <div class="pf-c-alert__description">${this.previewError}</div>
+                              </div>
+                          `
+                        : nothing}
+
+                    ${this.renderProgress()}
+                </div>
+
+                <div
+                    style="
+                        max-height: 60vh;
+                        overflow: auto;
+                        border: 1px solid var(--pf-global--BorderColor--100);
+                        border-radius: 6px;
+                        padding: 4px;
+                    "
+                >
+                    ${visible.length === 0
+                        ? html`<p style="margin: 6px;">${msg("No entries found.")}</p>`
+                        : html`
+                              <div style="display:grid; gap:4px;">
+                                  ${visible.map((row) => {
+                                      const checked = this.isSelected(row.key);
+                                      const label = String(row.label ?? "");
+                                      const eid = String(row.entityIdText ?? "");
+                                      const localEditable = this.canEditLocalSettings(row);
+                                      const isPanelOpen =
+                                          this.localSettingsOpen &&
+                                          this.localSettingsRowKey === row.key &&
+                                          !!row.uuid;
+
+                                      return html`
+                                          <div style="display:flex; flex-direction:column; gap: 0;">
+                                              <div
+                                                  style="
+                                                      display:flex;
+                                                      align-items:center;
+                                                      gap: 10px;
+                                                      padding: 6px 8px;
+                                                      border: 1px solid var(--pf-global--BorderColor--200);
+                                                      border-radius: 6px;
+                                                      background: var(--pf-global--BackgroundColor--100);
+                                                  "
+                                              >
+                                                  <input
+                                                      class="pf-c-check__input"
+                                                      type="checkbox"
+                                                      style="flex: 0 0 auto; margin: 0;"
+                                                      .checked=${checked}
+                                                      @change=${(ev: Event) => {
+                                                          const isChecked = (ev.target as HTMLInputElement).checked;
+                                                          this.toggleKey(row.key, isChecked);
+                                                      }}
+                                                  />
+
+                                                  <span style="flex: 0 0 auto; display:inline-flex; align-items:center;">
+                                                      ${this.renderCurrentBadge(row)}
+                                                  </span>
+
+                                                  <div
+                                                      style="
+                                                          flex: 1 1 auto;
+                                                          min-width: 0;
+                                                          display:flex;
+                                                          flex-direction:column;
+                                                          gap:2px;
+                                                      "
+                                                  >
+                                                      <div
+                                                          style="
+                                                              min-width:0;
+                                                              overflow:hidden;
+                                                              text-overflow:ellipsis;
+                                                              white-space:nowrap;
+                                                              font-size:13px;
+                                                              line-height:1.2;
+                                                              font-weight: 500;
+                                                          "
+                                                          title=${label}
+                                                      >
+                                                          ${label}
+                                                      </div>
+                                                      <div
+                                                          style="
+                                                              min-width:0;
+                                                              overflow:hidden;
+                                                              text-overflow:ellipsis;
+                                                              white-space:nowrap;
+                                                              font-size:12px;
+                                                              line-height:1.2;
+                                                              opacity:0.75;
+                                                              font-family: var(--pf-global--FontFamily--monospace);
+                                                          "
+                                                          title=${eid}
+                                                      >
+                                                          ${eid}
+                                                      </div>
+                                                  </div>
+
+                                                  ${localEditable
+                                                      ? html`
+                                                            <span style="flex:0 0 auto;">
+                                                                ${this.renderLocalSettingsBadge(row)}
+                                                            </span>
+                                                            <button
+                                                                type="button"
+                                                                class="pf-c-button pf-m-link pf-m-inline"
+                                                                style="flex:0 0 auto;"
+                                                                ?disabled=${this.actionLoading}
+                                                                @click=${() => this.openLocalSettings(row)}
+                                                            >
+                                                                ${msg("Local settings")}
+                                                            </button>
+                                                        `
+                                                      : nothing}
+
+                                                  <span style="flex: 0 0 auto; display:inline-flex; align-items:center;">
+                                                      ${this.renderPlannedBadge(row.key)}
+                                                  </span>
+                                              </div>
+
+                                              ${isPanelOpen
+                                                  ? this.kind === "sp"
+                                                    ? html`
+                                                        <div
+                                                            style="
+                                                                margin-top: 6px;
+                                                                border: 1px solid var(--pf-global--BorderColor--100);
+                                                                border-radius: 6px;
+                                                                background: var(--pf-global--BackgroundColor--100);
+                                                                padding: 10px 12px;
+                                                            "
+                                                        >
+                                                            <ak-saml-sp-db-local-settings-modal
+                                                                .open=${true}
+                                                                .providerPk=${this.ownerPk}
+                                                                .spUuid=${row.uuid ?? ""}
+                                                                .rowLabel=${row.label ?? ""}
+                                                                .rowEntityId=${row.entityIdText ?? ""}
+                                                                .propertyMappingsOverride=${row.propertyMappingsOverride ?? false}
+                                                                .propertyMappings=${row.propertyMappings ?? []}
+                                                                .verificationKpMode=${row.verificationKpMode ?? null}
+                                                                .encryptionKpMode=${row.encryptionKpMode ?? null}
+                                                                .signingKpMode=${row.signingKpMode ?? null}
+                                                                .disabled=${this.actionLoading}
+                                                                @ak-saml-sp-local-settings-saved=${this.onSPLocalSettingsSaved}
+                                                                @ak-saml-sp-local-settings-cancelled=${this.onLocalSettingsCancelled}
+                                                                @ak-saml-sp-local-settings-closed=${this.onLocalSettingsCancelled}
+                                                            ></ak-saml-sp-db-local-settings-modal>
+                                                        </div>
+                                                    `
+                                                      : html`
+                                                            <div
+                                                                style="
+                                                                    margin-top: 6px;
+                                                                    border: 1px solid var(--pf-global--BorderColor--100);
+                                                                    border-radius: 6px;
+                                                                    background: var(--pf-global--BackgroundColor--100);
+                                                                    padding: 10px 12px;
+                                                                "
+                                                            >
+                                                                <ak-saml-idp-db-local-settings-modal
+                                                                    .open=${true}
+                                                                    .sourcePk=${this.ownerPk}
+                                                                    .idpUuid=${row.uuid ?? ""}
+                                                                    .rowLabel=${row.label ?? ""}
+                                                                    .rowEntityId=${row.entityIdText ?? ""}
+                                                                    .verificationKpMode=${row.verificationKpMode ?? null}
+                                                                    .encryptionKpMode=${row.encryptionKpMode ?? null}
+                                                                    .signingKpMode=${row.signingKpMode ?? null}
+                                                                    .disabled=${this.actionLoading}
+                                                                    @ak-saml-idp-local-settings-saved=${this.onIdpLocalSettingsSaved}
+                                                                    @ak-saml-idp-local-settings-cancelled=${this.onLocalSettingsCancelled}
+                                                                    @ak-saml-idp-local-settings-closed=${this.onLocalSettingsCancelled}
+                                                                ></ak-saml-idp-db-local-settings-modal>
+                                                            </div>
+                                                        `
+                                                  : nothing}
+                                          </div>
+                                      `;
+                                  })}
+                              </div>
+                          `}
+                </div>
+            </form>
+        `;
+    }
+}
+
+declare global {
+    interface HTMLElementTagNameMap {
+        "ak-saml-snapshot-import": SAMLSnapshotImportForm;
+    }
+}

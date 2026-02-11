@@ -12,12 +12,24 @@ from rest_framework.viewsets import ModelViewSet
 from authentik.core.api.sources import SourceSerializer
 from authentik.core.api.used_by import UsedByMixin
 from authentik.providers.saml.api.providers import SAMLMetadataSerializer
+from authentik.providers.saml.utils.certrefs import (
+    sync_saml_source_cert_refs,
+)
 from authentik.sources.saml.models import SAMLSource
 from authentik.sources.saml.processors.metadata import MetadataProcessor
 
 
 class SAMLSourceSerializer(SourceSerializer):
     """SAMLSource Serializer"""
+    def create(self, validated_data):
+        instance: SAMLSource = super().create(validated_data)
+        sync_saml_source_cert_refs(instance)
+        return instance
+
+    def update(self, instance, validated_data):
+        instance: SAMLSource = super().update(instance, validated_data)
+        sync_saml_source_cert_refs(instance)
+        return instance
 
     def validate(self, attrs: dict):
         if attrs.get("verification_kp"):

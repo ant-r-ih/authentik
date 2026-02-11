@@ -3,8 +3,7 @@ import uuid
 
 from authentik.lib.models import DomainlessURLValidator
 from authentik.sources.saml.models import SAMLNameIDPolicy
-from authentik.providers.saml.models import SAMLBindings
-
+from authentik.providers.saml.models import SAMLBindings, PropertyMapping
 
 class Migration(migrations.Migration):
 
@@ -22,6 +21,7 @@ class Migration(migrations.Migration):
                 help_text="When disabled, the ACS URL from the SAML request is used instead of the provider's configured ACS URL.",
             ),
         ),
+
         migrations.CreateModel(
             name="SAMLSP",
             fields=[
@@ -63,19 +63,53 @@ class Migration(migrations.Migration):
                         help_text="If enabled, this SP can be selected during request processing.",
                     ),
                 ),
+
+                # -------------------------
+                # Metadata snapshot
+                # -------------------------
+                (
+                    "metadata_last_import",
+                    models.DateTimeField(
+                        null=True,
+                        blank=True,
+                    ),
+                ),
+                (
+                    "metadata_snapshot",
+                    models.JSONField(
+                        blank=True,
+                        default=dict,
+                        help_text="Extracted metadata structure for comparison and selection.",
+                        null=True,
+                    ),
+                ),
+                (
+                    "metadata_hash",
+                    models.CharField(
+                        blank=True,
+                        default="",
+                        help_text="Normalized metadata hash for change detection.",
+                        max_length=64,
+                        null=True,
+                    ),
+                ),
+
+                # -------------------------
+                # Selected runtime values
+                # -------------------------
                 (
                     "acs_url",
                     models.TextField(
                         validators=[DomainlessURLValidator(schemes=("http", "https"))],
-                        help_text="Assertion Consumer Service URL (metadata-derived).",
+                        help_text="Selected Assertion Consumer Service URL.",
                     ),
                 ),
                 (
                     "sp_binding",
                     models.TextField(
                         choices=SAMLBindings.choices,
-                        default=SAMLBindings.REDIRECT,
-                        help_text="Preferred binding for ACS.",
+                        default=SAMLBindings.POST,
+                        help_text="Selected binding for ACS.",
                     ),
                 ),
                 (
@@ -84,15 +118,15 @@ class Migration(migrations.Migration):
                         blank=True,
                         default="",
                         validators=[DomainlessURLValidator(schemes=("http", "https"))],
-                        help_text="Single Logout Service URL (metadata-derived).",
+                        help_text="Selected Single Logout Service URL.",
                     ),
                 ),
                 (
                     "sls_binding",
                     models.TextField(
                         choices=SAMLBindings.choices,
-                        default=SAMLBindings.REDIRECT,
-                        help_text="Preferred binding for SLS.",
+                        default=SAMLBindings.POST,
+                        help_text="Selected binding for SLS.",
                     ),
                 ),
                 (
@@ -135,7 +169,18 @@ class Migration(migrations.Migration):
                         on_delete=models.deletion.SET_NULL,
                         related_name="+",
                         to="authentik_crypto.certificatekeypair",
-                        help_text="SP request signature verification certificate (metadata-derived).",
+                        help_text="Selected verification certificate.",
+                    ),
+                ),
+                (
+                    "encryption_kp",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=models.deletion.SET_NULL,
+                        related_name="+",
+                        to="authentik_crypto.certificatekeypair",
+                        help_text="Selected encryption certificate.",
                     ),
                 ),
             ],
@@ -145,6 +190,7 @@ class Migration(migrations.Migration):
                 "ordering": ["provider", "name", "entity_id"],
             },
         ),
+
         migrations.AddConstraint(
             model_name="samlsp",
             constraint=models.UniqueConstraint(
@@ -152,6 +198,7 @@ class Migration(migrations.Migration):
                 name="uniq_samlsp_provider_entity_id",
             ),
         ),
+
         migrations.AddIndex(
             model_name="samlsp",
             index=models.Index(
@@ -159,26 +206,12 @@ class Migration(migrations.Migration):
                 name="samlsp_provider_enabled_idx",
             ),
         ),
+
         migrations.AddIndex(
             model_name="samlsp",
             index=models.Index(
                 fields=["entity_id"],
                 name="samlsp_entity_id_idx",
             ),
-        ),
-        migrations.AddField(
-            model_name="SAMLSession",
-            name="samlsp",
-            field=models.ForeignKey(
-                to="authentik_providers_saml.samlsp",
-                null=True,
-                blank=True,
-                on_delete=models.deletion.SET_NULL,
-                related_name="sessions",
-            ),
-        ),
-        migrations.AddIndex(
-            model_name="SAMLSession",
-            index=models.Index(fields=["samlsp"], name="samlsess_samlsp_idx"),
         ),
     ]

@@ -303,6 +303,12 @@ export function renderForm({
                         ${msg("When selected, assertions will be encrypted using this keypair.")}
                     </p>
                 </ak-form-element-horizontal>
+                <ak-switch-input
+                    name="strictAcsUrl"
+                    label=${msg("Strict ACS URL")}
+                    ?checked=${provider.strictAcsUrl ?? true}
+                    help=${msg("When disabled, the ACS URL in SAML request is accepted, even in case unknown Issuer.")}
+                ></ak-switch-input>
                 <ak-form-element-horizontal
                     label=${msg("Property mappings")}
                     name="propertyMappings"

@@ -27,8 +27,9 @@ from authentik.lib.models import CreatedUpdatedModel, SerializerModel
 LOGGER = get_logger()
 
 REF_MODEL_SAML_PROVIDER = "authentik.providers.saml.SAMLProvider"
+REF_MODEL_SAML_SOURCE = "authentik_sources_saml_samlsource"
 REF_MODEL_SAML_SP = "authentik.providers.saml.SAMLSP"
-
+REF_MODEL_SAML_IDP = "authentik_sources_saml_samlidp"
 
 def format_cert(raw_pam: str) -> str:
     """Format a PEM certificate that is either missing its header/footer or is in a single line"""
@@ -178,7 +179,7 @@ class CertificateReference(CreatedUpdatedModel):
     # Cached fingerprint for the referenced certificate (SHA-256 over DER), hex encoded.
     # 32 bytes -> 64 hex chars.
     fingerprint_sha256 = models.CharField(
-        max_length=64,
+        max_length=95,
         editable=False,
         help_text=_("SHA-256 fingerprint of the referenced certificate (hex)."),
     )

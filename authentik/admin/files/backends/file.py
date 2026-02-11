@@ -129,3 +129,10 @@ class FileBackend(ManageableBackend):
         """Check if a file exists."""
         path = self.base_path / Path(name)
         return path.exists()
+
+    @contextmanager
+    def open_file_stream(self, name: str, mode: str = "rb") -> Iterator:
+        """Context manager for streaming file reads from local filesystem."""
+        path = self.base_path / Path(name)
+        with open(path, mode) as f:
+            yield f

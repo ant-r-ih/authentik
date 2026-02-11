@@ -31,19 +31,25 @@ class TestImportSPFromGakunin(TestCase):
             return item.xml
         self.fail(f"Entity {entity_id} not found in fixture")
 
-    def _assert_cert_ref_exists(self, sp: SAMLSP, *, count: int = 1):
+    def _assert_cert_ref_exists(
+        self,
+        sp: SAMLSP,
+        *,
+        usage: str,
+        count: int = 1,
+        ):
         qs = CertificateReference.objects.filter(
             ref_model=REF_MODEL_SAML_SP,
             ref_pk=str(sp.pk),
-            usage=CertificateReference.Usage.SAML_VERIFICATION,
+            usage=usage,
         )
         self.assertEqual(
             qs.count(),
             count,
-            msg=f"Expected {count} CertificateReference rows for SAMLSP {sp.pk}, got {qs.count()}",
+            msg=f"Expected {count} CertificateReference rows "
+                f"for SAMLSP {sp.pk} usage={usage}, got {qs.count()}",
         )
         if count > 0:
-            # fingerprint_sha256 is required in your model; ensure it's populated.
             self.assertTrue(qs.first().fingerprint_sha256)
 
     def test_import_two_sps_from_gakunin_fixture(self):
@@ -71,8 +77,19 @@ class TestImportSPFromGakunin(TestCase):
 
         # verification_kp may be None for some entities, but Nature usually has KeyDescriptor.
         # If you want strictness: assertIsNotNone(sp1.verification_kp)
-        self._assert_cert_ref_exists(sp1, count=1 if sp1.verification_kp_id else 0)
+        self._assert_cert_ref_exists(
+            sp1,
+            usage=CertificateReference.Usage.SAML_VERIFICATION,
+            count=1 if sp1.verification_kp_id else 0)
 
+        enc_refs = CertificateReference.objects.filter(
+            ref_model=REF_MODEL_SAML_SP,
+            ref_pk=str(sp1.pk),
+            usage=CertificateReference.Usage.SAML_ENCRYPTION,
+        )
+
+        expected = 1 if sp1.encryption_kp_id else 0
+        self.assertEqual(enc_refs.count(), expected)
         # --- Import #2: Atlases
         sp2, created2 = import_sp_from_entity_descriptor(
             provider=provider, entity=ent_atlases, enabled=True
@@ -80,7 +97,10 @@ class TestImportSPFromGakunin(TestCase):
         self.assertTrue(created2)
         self.assertEqual(sp2.entity_id, ENTITY_ATLASES)
         self.assertTrue(sp2.acs_url)
-        self._assert_cert_ref_exists(sp2, count=1 if sp2.verification_kp_id else 0)
+        self._assert_cert_ref_exists(
+            sp2,
+            usage=CertificateReference.Usage.SAML_ENCRYPTION,
+            count=1 if sp2.verification_kp_id else 0)
 
         self.assertEqual(SAMLSP.objects.filter(provider=provider).count(), 2)
 

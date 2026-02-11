@@ -105,13 +105,18 @@ export class FileUploadForm extends Form<Record<string, unknown>> {
     }
 
     renderForm() {
+        const accept =
+            this.usage === AdminFileListUsageEnum.SamlMetadata
+                ? ".xml,.gz,application/xml,text/xml,application/gzip"
+                : "";
         return html`
-            <form ${ref(this.#formRef)} class="pf-c-form pf-m-horizontal">
+        <form ${ref(this.#formRef)} class="pf-c-form pf-m-horizontal">
                 <ak-form-element-horizontal label=${msg("File")} required>
                     <input
                         type="file"
                         class="pf-c-form-control"
                         id="file-input"
+                       accept=${accept}
                         required
                         @change=${this.#fileChangeListener}
                     />

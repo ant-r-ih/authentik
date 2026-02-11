@@ -23,7 +23,6 @@ from authentik.lib.views import bad_request_message
 from authentik.policies.utils import delete_none_values
 from authentik.providers.saml.models import (
     SAMLSP,
-    SAMLBindings,
     SAMLProvider,
     SAMLSession,
 )
@@ -31,6 +30,7 @@ from authentik.providers.saml.processors.assertion import AssertionProcessor
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequest
 from authentik.providers.saml.utils.encoding import deflate_and_base64_encode, nice64
 from authentik.sources.saml.exceptions import SAMLException
+from authentik.sources.saml.processors.constants import SAML_BINDING_POST, SAML_BINDING_REDIRECT
 
 LOGGER = get_logger()
 URL_VALIDATOR = URLValidator(schemes=("http", "https"))
@@ -64,8 +64,8 @@ class SAMLFlowFinalView(ChallengeStageView):
 
         auth_n_request: AuthNRequest = self.executor.plan.context[PLAN_CONTEXT_SAML_AUTH_N_REQUEST]
         samlsp = None
-        if getattr(auth_n_request, "samlsp_pk", None):
-            samlsp = SAMLSP.objects.filter(pk=auth_n_request.samlsp_pk).first()
+        if getattr(auth_n_request, "sp", None):
+            samlsp = auth_n_request.sp
         try:
             processor = AssertionProcessor(provider, request, auth_n_request)
             response = processor.build_response()
@@ -107,7 +107,7 @@ class SAMLFlowFinalView(ChallengeStageView):
             flow=self.executor.plan.flow_pk,
         ).from_http(self.request)
 
-        if auth_n_request.sp_binding == SAMLBindings.POST:
+        if auth_n_request.sp_binding == SAML_BINDING_POST:
             form_attrs = delete_none_values(
                 {
                     REQUEST_KEY_SAML_RESPONSE: nice64(response),
@@ -126,7 +126,7 @@ class SAMLFlowFinalView(ChallengeStageView):
                     "attrs": form_attrs,
                 },
             )
-        if auth_n_request.sp_binding == SAMLBindings.REDIRECT:
+        if auth_n_request.sp_binding == SAML_BINDING_REDIRECT:
             url_args = {
                 REQUEST_KEY_SAML_RESPONSE: deflate_and_base64_encode(response),
             }
@@ -136,7 +136,7 @@ class SAMLFlowFinalView(ChallengeStageView):
             return redirect(
                 f"{auth_n_request.acs_url if auth_n_request.acs_url else provider.acs_url}?{querystring}"  # noqa: E501
             )
-        return bad_request_message(request, "Invalid sp_binding specified")
+        return bad_request_message(request, f"Invalid sp_binding specified: {auth_n_request.sp_binding}")
 
     def get_challenge(self, *args, **kwargs) -> Challenge:
         return AutosubmitChallenge(data=kwargs)

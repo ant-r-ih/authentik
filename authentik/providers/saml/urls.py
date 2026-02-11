@@ -5,7 +5,7 @@ from django.urls import path
 from authentik.providers.saml.api.catalog import SAMLMetadataCatalogViewSet
 from authentik.providers.saml.api.property_mappings import SAMLPropertyMappingViewSet
 from authentik.providers.saml.api.providers import SAMLProviderViewSet
-from authentik.providers.saml.api.samlsp import SAMLSPImportViewSet, SAMLSPViewSet
+from authentik.providers.saml.api.samlsp import SAMLSPViewSet
 from authentik.providers.saml.views import metadata, sso
 from authentik.providers.saml.views.sp_slo import (
     SPInitiatedSLOBindingPOSTView,
@@ -48,11 +48,24 @@ urlpatterns = [
         name="metadata-download",
     ),
 ]
-
+'''
 api_urlpatterns = [
     ("propertymappings/provider/saml", SAMLPropertyMappingViewSet),
-    ("providers/samlsp/import", SAMLSPImportViewSet, "samlsp-import"),
+    ("providers/samlsp", SAMLSPViewSet, "samlsp"),
+    ("providers/samlsp-mport", SAMLSPImportViewSet, "samlsp-import"),
+    ("providers/saml/catalog", SAMLMetadataCatalogViewSet, "saml-catalog"),
     ("providers/saml", SAMLProviderViewSet),
-    ("providers/samlsp", SAMLSPViewSet),
-    ("providers/saml/catalog", SAMLMetadataCatalogViewSet, "saml-metadata-catalog"),
 ]
+'''
+
+
+'''
+'''
+api_urlpatterns = [
+    ("propertymappings/provider/saml", SAMLPropertyMappingViewSet),
+    ("providers/samlsp", SAMLSPViewSet, "samlsp"),
+    ("providers/saml/catalog", SAMLMetadataCatalogViewSet, "saml-catalog"),
+    ("providers/saml", SAMLProviderViewSet),
+]
+'''
+'''

@@ -19,7 +19,7 @@ from authentik.crypto.models import CertificateKeyPair
 from authentik.events.models import Event, EventAction
 from authentik.lib.generators import generate_id
 from authentik.lib.xml import lxml_from_string
-from authentik.providers.saml.models import SAMLPropertyMapping, SAMLProvider
+from authentik.providers.saml.models import SAMLPropertyMapping, SAMLProvider, SAMLSPKeyOverrideMode
 from authentik.providers.saml.processors.assertion import AssertionProcessor
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequestParser
 from authentik.providers.saml.utils.certrefs import (
@@ -70,6 +70,7 @@ class TestAuthNResolve(TestCase):
             enabled=True,
             acs_url=self.acs,
             verification_kp=self.cert_sp,
+            verification_kp_mode=SAMLSPKeyOverrideMode.SET,
         )
         sync_saml_sp_cert_refs(sp)
         sync_saml_provider_cert_refs(self.provider)
@@ -100,6 +101,12 @@ class TestAuthNResolve(TestCase):
         self.assertEqual(parsed_request.id, request_proc.request_id)
         self.assertEqual(parsed_request.relay_state, "test_state")
         self.assertEqual(parsed_request.acs_url, self.acs)
+
+        self.assertIsNotNone(parsed_request.cfg)
+        self.assertEqual(parsed_request.acs_url, self.acs)
+        self.assertEqual(parsed_request.sp_binding, SAML_BINDING_POST)
+        self.assertEqual(parsed_request.cfg.acs_url, self.acs)
+        self.assertEqual(parsed_request.cfg.sp_binding, SAML_BINDING_POST)
 
     def test_request_encrypt(self):
         """Test full SAML Request/Response flow, fully encrypted"""
@@ -388,6 +395,28 @@ class TestAuthNResolve(TestCase):
             events.first().context["message"],
             f"Failed to evaluate property-mapping: '{mapping.name}'",
         )
+    def test_parsed_request_uses_sp_signing_kp_override(self):
+        """Parsed request config should use SP signing_kp when signing_kp_mode=SET."""
+        # provider default signing key (already set in setUp): self.cert_idp
+        # prepare SP-local signing override
+        sp = self.provider.service_providers.get(entity_id=self.issuer)
+        sp.signing_kp = self.cert_overridden_sp
+        sp.signing_kp_mode = SAMLSPKeyOverrideMode.SET
+        sp.save()
+
+        http_request = self.request_factory.get("/")
+
+        # Build AuthnRequest from source side
+        request_proc = RequestProcessor(self.source, http_request, "test_state")
+        request = request_proc.build_auth_n()
+
+        # Parse on provider side
+        parsed_request = AuthNRequestParser(self.provider).parse(
+            b64encode(request.encode()).decode(), "test_state"
+        )
+
+        self.assertIsNotNone(parsed_request.cfg)
+        self.assertEqual(parsed_request.cfg.signing_kp, self.cert_overridden_sp)
 
     def test_idp_initiated(self):
         """Test IDP-initiated login"""
@@ -395,3 +424,21 @@ class TestAuthNResolve(TestCase):
         request = AuthNRequestParser(self.provider).idp_initiated()
         self.assertEqual(request.id, None)
         self.assertEqual(request.relay_state, self.provider.default_relay_state)
+
+    def test_parsed_request_uses_no_signing_kp_when_sp_mode_none(self):
+        """SP signing_kp_mode=NONE should suppress provider signing key."""
+        sp = self.provider.service_providers.get(entity_id=self.issuer)
+        sp.signing_kp = None
+        sp.signing_kp_mode = SAMLSPKeyOverrideMode.NONE
+        sp.save()
+
+        http_request = self.request_factory.get("/")
+        request_proc = RequestProcessor(self.source, http_request, "test_state")
+        request = request_proc.build_auth_n()
+
+        parsed_request = AuthNRequestParser(self.provider).parse(
+            b64encode(request.encode()).decode(), "test_state"
+        )
+
+        self.assertIsNotNone(parsed_request.cfg)
+        self.assertIsNone(parsed_request.cfg.signing_kp)

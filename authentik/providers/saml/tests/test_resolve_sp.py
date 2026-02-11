@@ -2,25 +2,20 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
 
 from defusedxml import ElementTree
 from django.test import TestCase
 
-from authentik.core.tests.utils import (
-    create_test_cert,
-    create_test_flow,
-)
-from authentik.providers.saml.context import (
-    SAMLContext,
-    get_saml_ctx,
-    reset_saml_ctx,
-    set_saml_ctx,
-)
+from authentik.core.tests.utils import create_test_cert, create_test_flow
 from authentik.providers.saml.exceptions import CannotHandleAssertion
-from authentik.providers.saml.models import SAMLProvider
+from authentik.providers.saml.models import SAMLPropertyMapping, SAMLProvider
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequestParser
-from authentik.providers.saml.resolve import resolve_acs_url, resolve_verification_kp
+from authentik.providers.saml.processors.logout_request_parser import LogoutRequestParser
+from authentik.providers.saml.resolve import (
+    build_samlsp_config,
+    resolve_acs_url,
+    resolve_verification_kp,
+)
 
 POST_REQUEST = (
     "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz48c2FtbDJwOkF1dGhuUmVxdWVzdCB4bWxuczpzYW1sMn"
@@ -45,20 +40,21 @@ REDIRECT_REQUEST = (
 
 REDIRECT_RELAY_STATE = "ss:mem:7a054b4af44f34f89dd2d973f383c250b6b076e7f06cfa8276008a6504eaf3c7"
 
-
-@dataclass(slots=True)
-class DummySP:
-    """Minimal SP stub for resolver tests."""
-
-    acs_url: str | None = None
-    verification_kp: object | None = None
+POST_LOGOUT_REQUEST = (
+    "PHNhbWxwOkxvZ291dFJlcXVlc3QgeG1sbnM6c2FtbD0idXJuOm9hc2lzOm5hbWVzOnRjOlNBTUw6Mi4wOmFzc2VydGlvb"
+    "iIgeG1sbnM6c2FtbHA9InVybjpvYXNpczpuYW1lczp0YzpTQU1MOjIuMDpwcm90b2NvbCIgSUQ9ImlkLWI4ZjRmZDUxZW"
+    "Q0MTA2ZjFlNzgyYjk1ZDUxZDlhZDNmMzg1ZTU4MTYiIFZlcnNpb249IjIuMCIgSXNzdWVJbnN0YW50PSIyMDIyLTAyLTI"
+    "xVDIyOjUwOjMzLjk5OVoiIERlc3RpbmF0aW9uPSJodHRwOi8vbG9jYWxob3N0OjkwMDAvYXBwbGljYXRpb24vc2FtbC90"
+    "ZXN0L3Nsby9wb3N0LyI+PHNhbWw6SXNzdWVyIEZvcm1hdD0idXJuOm9hc2lzOm5hbWVzOnRjOlNBTUw6Mi4wOm5hbWVpZ"
+    "C1mb3JtYXQ6ZW50aXR5Ij5zYW1sLXRlc3Qtc3A8L3NhbWw6SXNzdWVyPjxzYW1sOk5hbWVJRCBOYW1lUXVhbGlmaWVyPS"
+    "JzYW1sLXRlc3Qtc3AiIFNQTmFtZVF1YWxpZmllcj0ic2FtbC10ZXN0LXNwIiBGb3JtYXQ9InVybjpvYXNpczpuYW1lczp"
+    "0YzpTQU1MOjIuMDpuYW1laWQtZm9ybWF0OnRyYW5zaWVudCIvPjwvc2FtbHA6TG9nb3V0UmVxdWVzdD4="
+)
 
 
 class TestSAMLResolver(TestCase):
-    def test_sp_resolver(self):
-        """Resolver should prefer SP values when present, otherwise fallback to provider.
-        ContextVar must be reset after use.
-        """
+    def test_resolve_falls_back_to_provider_values(self):
+        """Without an SP-specific override, resolver returns provider values."""
         provider_cert = create_test_cert()
         provider = SAMLProvider.objects.create(
             name="p",
@@ -67,39 +63,10 @@ class TestSAMLResolver(TestCase):
             verification_kp=provider_cert,
         )
 
-        # 1) No context => provider values
         self.assertEqual(resolve_acs_url(provider), "https://provider.example/acs")
         self.assertEqual(resolve_verification_kp(provider), provider_cert)
 
-        # 2) With SP in context => SP overrides
-        sp_cert = create_test_cert()
-        sp = DummySP(
-            acs_url="https://sp.example/acs",
-            verification_kp=sp_cert,
-        )
-        token = set_saml_ctx(SAMLContext(provider=provider, sp=sp, issuer="urn:test:sp"))
-        try:
-            self.assertEqual(resolve_acs_url(provider), "https://sp.example/acs")
-            self.assertEqual(resolve_verification_kp(provider), sp_cert)
-        finally:
-            reset_saml_ctx(token)
-
-        # 3) Context must be cleared after reset (no leakage)
-        self.assertIsNone(get_saml_ctx())
-        self.assertEqual(resolve_acs_url(provider), "https://provider.example/acs")
-        self.assertEqual(resolve_verification_kp(provider), provider_cert)
-
-        # 4) SP exists but values are None => fallback to provider
-        sp2 = DummySP(acs_url=None, verification_kp=None)
-        token2 = set_saml_ctx(SAMLContext(provider=provider, sp=sp2, issuer="urn:test:sp2"))
-        try:
-            self.assertEqual(resolve_acs_url(provider), "https://provider.example/acs")
-            self.assertEqual(resolve_verification_kp(provider), provider_cert)
-        finally:
-            reset_saml_ctx(token2)
-        self.assertIsNone(get_saml_ctx())
-
-    def test_parse_post_sets_samlsp_pk_and_resets_ctx(self):
+    def test_parse_post_sets_samlsp(self):
         provider = SAMLProvider.objects.create(
             name="example",
             authorization_flow=create_test_flow(),
@@ -115,11 +82,9 @@ class TestSAMLResolver(TestCase):
         req = AuthNRequestParser(provider).parse(POST_REQUEST)
 
         self.assertEqual(req.issuer, sp.entity_id)
-        self.assertEqual(req.samlsp_pk, str(sp.pk))
+        self.assertEqual(req.sp, sp)
 
-        self.assertIsNone(get_saml_ctx())
-
-    def test_parse_redirect_sets_samlsp_pk_and_resets_ctx(self):
+    def test_parse_redirect_sets_samlsp(self):
         provider = SAMLProvider.objects.create(
             name="example",
             authorization_flow=create_test_flow(),
@@ -135,9 +100,29 @@ class TestSAMLResolver(TestCase):
         req = AuthNRequestParser(provider).parse_detached(REDIRECT_REQUEST, REDIRECT_RELAY_STATE)
 
         self.assertEqual(req.issuer, sp.entity_id)
-        self.assertEqual(req.samlsp_pk, str(sp.pk))
+        self.assertEqual(req.sp, sp)
 
-        self.assertIsNone(get_saml_ctx())
+    def test_parse_logout_parses_issuer_and_nameid(self):
+        """Logout parser should parse issuer and NameID without ctx assumptions."""
+        provider = SAMLProvider.objects.create(
+            name="example",
+            authorization_flow=create_test_flow(),
+            acs_url="https://sp.example/acs",
+        )
+
+        provider.service_providers.create(
+            name="aws-sp",
+            entity_id="saml-test-sp",
+            enabled=True,
+            acs_url="https://example.invalid/logout/acs",
+        )
+
+        req = LogoutRequestParser(provider).parse(POST_LOGOUT_REQUEST)
+
+        self.assertEqual(req.issuer, "saml-test-sp")
+        # self.assertEqual(req.sp, sp)  # LogoutRequest doesn't have SP, just issuer
+        self.assertEqual(req.name_id_format, "urn:oasis:names:tc:SAML:2.0:nameid-format:transient")
+        self.assertIsNotNone(req.id)
 
     def test_parse_without_sp_strict_acs_ok(self):
         provider = SAMLProvider.objects.create(
@@ -145,14 +130,13 @@ class TestSAMLResolver(TestCase):
             authorization_flow=create_test_flow(),
             acs_url="https://eu-central-1.signin.aws.amazon.com/platform/saml/acs/2d737f96-55fb-4035-953e-5e24134eb778",
         )
-        #        provider.strict_acs_url = True # Default value
         req = AuthNRequestParser(provider).parse(POST_REQUEST)
 
         self.assertIsNotNone(req)
         self.assertEqual(
             req.issuer, "https://eu-central-1.signin.aws.amazon.com/platform/saml/d-99672f8278"
         )
-        self.assertIsNone(req.samlsp_pk)
+        self.assertIsNone(req.sp)
         self.assertEqual(
             req.acs_url,
             "https://eu-central-1.signin.aws.amazon.com/platform/saml/acs/2d737f96-55fb-4035-953e-5e24134eb778",
@@ -164,7 +148,6 @@ class TestSAMLResolver(TestCase):
             authorization_flow=create_test_flow(),
             acs_url="https://example.com/acs",
         )
-        #        provider.strict_acs_url = True # Default value
         with self.assertRaises(CannotHandleAssertion):
             AuthNRequestParser(provider).parse(POST_REQUEST)
 
@@ -176,11 +159,12 @@ class TestSAMLResolver(TestCase):
         )
         provider.strict_acs_url = False
         req = AuthNRequestParser(provider).parse(POST_REQUEST)
+
         self.assertIsNotNone(req)
         self.assertEqual(
             req.issuer, "https://eu-central-1.signin.aws.amazon.com/platform/saml/d-99672f8278"
         )
-        self.assertIsNone(req.samlsp_pk)
+        self.assertIsNone(req.sp)
         self.assertEqual(
             req.acs_url,
             "https://eu-central-1.signin.aws.amazon.com/platform/saml/acs/2d737f96-55fb-4035-953e-5e24134eb778",
@@ -200,3 +184,80 @@ class TestSAMLResolver(TestCase):
         req = AuthNRequestParser(provider).parse(request)
 
         self.assertIsNotNone(req.id)
+        self.assertEqual(req.acs_url, "https://example.com/acs")
+
+    class TestSAMLSPConfigPropertyMappings(TestCase):
+        def _mk_pm(self, name: str) -> SAMLPropertyMapping:
+            return SAMLPropertyMapping.objects.create(
+                name=name,
+                expression="return {}",
+            )
+
+        def test_build_config_property_mappings_fallback_to_provider_when_no_sp(self):
+            provider = SAMLProvider.objects.create(
+                name="p1",
+                authorization_flow=create_test_flow(),
+                acs_url="https://provider.example/acs",
+            )
+            pm1 = self._mk_pm("pm1")
+            pm2 = self._mk_pm("pm2")
+            provider.property_mappings.set([pm1, pm2])
+
+            cfg = build_samlsp_config(provider, None)
+
+            self.assertSetEqual(
+                {pm.pk for pm in cfg.property_mappings},
+                {pm1.pk, pm2.pk},
+            )
+
+        def test_build_config_property_mappings_fallback_to_provider_when_sp_empty(self):
+            provider = SAMLProvider.objects.create(
+                name="p2",
+                authorization_flow=create_test_flow(),
+                acs_url="https://provider.example/acs",
+            )
+            pm1 = self._mk_pm("pm1")
+            pm2 = self._mk_pm("pm2")
+            provider.property_mappings.set([pm1, pm2])
+
+            sp = provider.service_providers.create(
+                name="sp1",
+                entity_id="https://sp.example/metadata",
+                enabled=True,
+                acs_url="https://sp.example/acs",
+            )
+            # sp.property_mappings is empty
+
+            cfg = build_samlsp_config(provider, sp)
+
+            self.assertSetEqual(
+                {pm.pk for pm in cfg.property_mappings},
+                {pm1.pk, pm2.pk},
+            )
+
+        def test_build_config_property_mappings_sp_complete_override(self):
+            provider = SAMLProvider.objects.create(
+                name="p3",
+                authorization_flow=create_test_flow(),
+                acs_url="https://provider.example/acs",
+            )
+            ppm1 = self._mk_pm("provider-pm1")
+            ppm2 = self._mk_pm("provider-pm2")
+            spm1 = self._mk_pm("sp-pm1")
+
+            provider.property_mappings.set([ppm1, ppm2])
+
+            sp = provider.service_providers.create(
+                name="sp2",
+                entity_id="https://sp2.example/metadata",
+                enabled=True,
+                acs_url="https://sp2.example/acs",
+            )
+            sp.property_mappings.set([spm1])
+
+            cfg = build_samlsp_config(provider, sp)
+
+            self.assertSetEqual(
+                {pm.pk for pm in cfg.property_mappings},
+                {spm1.pk},
+            )

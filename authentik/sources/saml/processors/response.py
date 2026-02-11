@@ -46,6 +46,7 @@ from authentik.sources.saml.processors.constants import (
     SAML_NAME_ID_FORMAT_X509,
 )
 from authentik.sources.saml.processors.request import SESSION_KEY_REQUEST_ID
+from authentik.sources.saml.resolve import build_samlidp_config
 
 LOGGER = get_logger()
 if TYPE_CHECKING:
@@ -61,6 +62,13 @@ class ResponseProcessor:
 
     _root: _Element
     _root_xml: bytes
+
+    _verification_kp = None
+    _encryption_kp = None
+    _allow_idp_initiated = None
+    _signed_response = None
+    _signed_assertion = None
+    _cfg = None
 
     _http_request: HttpRequest
 
@@ -78,15 +86,26 @@ class ResponseProcessor:
         self._root_xml = b64decode(raw_response.encode())
         self._root = fromstring(self._root_xml)
 
+        entity_id = _peek_issuer_lxml(self._root)
+        idp = self._source.get_idp(entity_id)
+
+        cfg = build_samlidp_config(self._source, idp)
+        self._cfg = cfg
+        self._verification_kp = cfg.verification_kp
+        self._encryption_kp = cfg.encryption_kp
+        self._allow_idp_initiated = cfg.allow_idp_initiated
+        self._signed_response = cfg.signed_response
+        self._signed_assertion = cfg.signed_assertion
         # Verify response signature BEFORE decryption (signature covers encrypted content)
-        if self._source.verification_kp and self._source.signed_response:
+        if self._verification_kp and self._signed_response:
             self._verify_response_signature()
 
-        if self._source.encryption_kp:
+
+        if self._encryption_kp:
             self._decrypt_response()
 
         # Verify assertion signature AFTER decryption (signature is inside encrypted content)
-        if self._source.verification_kp and self._source.signed_assertion:
+        if self._verification_kp and self._signed_assertion:
             self._verify_assertion_signature()
 
         self._verify_request_id()
@@ -96,7 +115,7 @@ class ResponseProcessor:
         """Decrypt SAMLResponse EncryptedAssertion Element"""
         manager = xmlsec.KeysManager()
         key = xmlsec.Key.from_memory(
-            self._source.encryption_kp.key_data,
+            self._encryption_kp.key_data,
             xmlsec.constants.KeyDataFormatPem,
         )
 
@@ -127,7 +146,7 @@ class ResponseProcessor:
 
         ctx = xmlsec.SignatureContext()
         key = xmlsec.Key.from_memory(
-            self._source.verification_kp.certificate_data,
+            self._verification_kp.certificate_data,
             xmlsec.constants.KeyDataFormatCertPem,
         )
         ctx.key = key
@@ -162,7 +181,7 @@ class ResponseProcessor:
         self._verify_signature(signature_nodes[0])
 
     def _verify_request_id(self):
-        if self._source.allow_idp_initiated:
+        if self._allow_idp_initiated:
             # If IdP-initiated SSO flows are enabled, we want to cache the Response ID
             # somewhat mitigate replay attacks
             seen_ids = cache.get(CACHE_SEEN_REQUEST_ID % self._source.pk, [])
@@ -268,10 +287,10 @@ class ResponseProcessor:
         """Prepare flow plan depending on whether or not the user exists"""
         name_id = self._get_name_id()
         # Sanity check, show a warning if NameIDPolicy doesn't match what we go
-        if self._source.name_id_policy != name_id.attrib["Format"]:
+        if self._cfg.name_id_policy != name_id.attrib["Format"]:
             LOGGER.warning(
                 "NameID from IdP doesn't match our policy",
-                expected=self._source.name_id_policy,
+                expected=self.cfg.name_id_policy,
                 got=name_id.attrib["Format"],
             )
         # transient NameIDs are handled separately as they don't have to go through flows.
@@ -297,3 +316,11 @@ class SAMLSourceFlowManager(SourceFlowManager):
 
     user_connection_type = UserSAMLSourceConnection
     group_connection_type = GroupSAMLSourceConnection
+
+def _peek_issuer_lxml(root: _Element) -> str | None:
+    issuers = root.xpath("/samlp:Response/saml:Issuer", namespaces=NS_MAP)
+    if not issuers:
+        issuers = root.xpath("/samlp:Response/saml:Assertion/saml:Issuer", namespaces=NS_MAP)
+    if not issuers:
+        return None
+    return issuers[0].text or None
