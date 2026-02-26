@@ -10150,6 +10150,10 @@
                         "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"
                     ],
                     "title": "Default name id policy"
+                },
+                "strict_acs_url": {
+                    "type": "boolean",
+                    "title": "Strict acs url"
                 }
             },
             "required": []

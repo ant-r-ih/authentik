@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from authentik.crypto.models import CertificateKeyPair
-from authentik.providers.saml.context import get_current_sp
 from authentik.providers.saml.exceptions import CannotHandleAssertion
 from authentik.providers.saml.models import SAMLProvider
 from authentik.sources.saml.processors.constants import NS_MAP, NS_SAML_ASSERTION, NS_SAML_PROTOCOL
@@ -44,116 +43,18 @@ def find_first_text(root, qnames: Iterable[str]) -> str | None:
             return text
     return None
 
-def _sp_value(sp, attr: str):
-    if not sp:
-        return None
-    v = getattr(sp, attr, None)
-    # normalize empty strings
-    if isinstance(v, str) and v.strip() == "":
-        return None
-    return v
-
-def _sp_mode(sp, attr: str) -> str | None:
-    """Read mode field from SP, keeping duck-typed compatibility."""
-    if not sp:
-        return None
-    v = getattr(sp, attr, None)
-    if isinstance(v, str):
-        v = v.strip().lower()
-    return v or None
-
-def _resolve_kp_with_mode(
-    sp,
+def _resolve_kp_with_override(
+    local_obj: Any,
     *,
-    mode_attr: str,
-    kp_attr: str,
-    provider_kp: CertificateKeyPair | None,
+    override_attr: str,  # e.g. "verification_kp_override"
+    kp_attr: str,        # e.g. "verification_kp"
+    fallback_kp: CertificateKeyPair | None,
 ) -> CertificateKeyPair | None:
-    """Resolve keypair using SAMLSP tri-state mode if present.
-
-    Supported mode values (string-based for compatibility):
-    - "inherit": use provider keypair
-    - "set":     use SP local keypair (may be None on inconsistent data)
-    - "none":    explicitly disable keypair
-    If mode is missing/unknown, fallback to legacy behavior:
-    - SP local keypair wins, then provider fallback.
-    """
-    mode = _sp_mode(sp, mode_attr)
-    local_kp = _sp_value(sp, kp_attr)
-
-    if mode == "none":
-        return None
-    if mode == "set":
-        return local_kp
-    if mode == "inherit":
-        return provider_kp
-
-    # Legacy fallback (mode field absent during migration / older rows)
-    return local_kp or provider_kp
-
-def resolve_acs_url(provider: SAMLProvider) -> str:
-    sp = get_current_sp()
-    return _sp_value(sp, "acs_url") or provider.acs_url
-
-
-def resolve_sp_binding(provider: SAMLProvider) -> str:
-    sp = get_current_sp()
-    return _sp_value(sp, "sp_binding") or provider.sp_binding
-
-
-def resolve_sls_url(provider: SAMLProvider) -> str:
-    sp = get_current_sp()
-    return _sp_value(sp, "sls_url") or provider.sls_url
-
-
-def resolve_sls_binding(provider: SAMLProvider) -> str:
-    sp = get_current_sp()
-    return _sp_value(sp, "sls_binding") or provider.sls_binding
-
-
-def resolve_logout_method(provider: SAMLProvider) -> str:
-    sp = get_current_sp()
-    return _sp_value(sp, "logout_method") or provider.logout_method
-
-
-def resolve_digest_algorithm(provider: SAMLProvider) -> str:
-    sp = get_current_sp()
-    return _sp_value(sp, "digest_algorithm") or provider.digest_algorithm
-
-
-def resolve_signature_algorithm(provider: SAMLProvider) -> str:
-    sp = get_current_sp()
-    return _sp_value(sp, "signature_algorithm") or provider.signature_algorithm
-
-
-def resolve_verification_kp(provider: SAMLProvider) -> CertificateKeyPair | None:
-    sp = get_current_sp()
-    return _resolve_kp_with_mode(
-        sp,
-        mode_attr="verification_kp_mode",
-        kp_attr="verification_kp",
-        provider_kp=provider.verification_kp,
-    )
-
-
-def resolve_signing_kp(provider: SAMLProvider) -> CertificateKeyPair | None:
-    sp = get_current_sp()
-    return _resolve_kp_with_mode(
-        sp,
-        mode_attr="signing_kp_mode",
-        kp_attr="signing_kp",
-        provider_kp=provider.signing_kp,
-    )
-
-
-def resolve_encryption_kp(provider: SAMLProvider) -> CertificateKeyPair | None:
-    sp = get_current_sp()
-    return _resolve_kp_with_mode(
-        sp,
-        mode_attr="encryption_kp_mode",
-        kp_attr="encryption_kp",
-        provider_kp=provider.encryption_kp,
-    )
+    if local_obj is None:
+        return fallback_kp
+    if getattr(local_obj, override_attr, False):
+        return getattr(local_obj, kp_attr, None)  # may be None => disabled
+    return fallback_kp
 @dataclass(slots=True)
 class ResolvedRequestTarget:
     """Resolved target runtime values for an incoming AuthnRequest/LogoutRequest."""
@@ -271,12 +172,10 @@ class SAMLSPRuntimeConfig:
 
 
 def build_samlsp_config(provider: SAMLProvider, sp=None, *, target=None) -> SAMLSPRuntimeConfig:
-    # request-target-aware target selection
     target_sp = sp
     if target is not None and getattr(target, "sp", None) is not None:
         target_sp = target.sp
 
-    # target values (request attrs may override)
     if target is not None:
         acs_url = target.acs_url
         sp_binding = target.sp_binding
@@ -284,15 +183,23 @@ def build_samlsp_config(provider: SAMLProvider, sp=None, *, target=None) -> SAML
         acs_url = _pick(target_sp, provider, "acs_url")
         sp_binding = _pick(target_sp, provider, "sp_binding")
 
-    # IMPORTANT: key resolution must use explicit target_sp, not context/global resolve
-    verification_kp = _pick_kp_with_mode(
-        target_sp, provider, mode_attr="verification_kp_mode", kp_attr="verification_kp"
+    verification_kp = _resolve_kp_with_override(
+        target_sp,
+        override_attr="verification_kp_override",
+        kp_attr="verification_kp",
+        fallback_kp=getattr(provider, "verification_kp", None),
     )
-    signing_kp = _pick_kp_with_mode(
-        target_sp, provider, mode_attr="signing_kp_mode", kp_attr="signing_kp"
+    signing_kp = _resolve_kp_with_override(
+        target_sp,
+        override_attr="signing_kp_override",
+        kp_attr="signing_kp",
+        fallback_kp=getattr(provider, "signing_kp", None),
     )
-    encryption_kp = _pick_kp_with_mode(
-        target_sp, provider, mode_attr="encryption_kp_mode", kp_attr="encryption_kp"
+    encryption_kp = _resolve_kp_with_override(
+        target_sp,
+        override_attr="encryption_kp_override",
+        kp_attr="encryption_kp",
+        fallback_kp=getattr(provider, "encryption_kp", None),
     )
 
     property_mappings = _pick_property_mappings(provider, target_sp)
@@ -304,8 +211,10 @@ def build_samlsp_config(provider: SAMLProvider, sp=None, *, target=None) -> SAML
         sls_url=_pick(target_sp, provider, "sls_url"),
         sls_binding=_pick(target_sp, provider, "sls_binding"),
         logout_method=_pick(target_sp, provider, "logout_method"),
-        digest_algorithm=_pick(target_sp, provider, "digest_algorithm"),
-        signature_algorithm=_pick(target_sp, provider, "signature_algorithm"),
+
+        digest_algorithm=provider.digest_algorithm,
+        signature_algorithm=provider.signature_algorithm,
+
         verification_kp=verification_kp,
         signing_kp=signing_kp,
         encryption_kp=encryption_kp,
@@ -325,14 +234,6 @@ def _pick_property_mappings(provider: SAMLProvider, sp):
     # - return SP mappings as-is
     # - empty queryset means "no attributes"
     return sp.property_mappings.all()
-
-def _pick_kp_with_mode(sp, provider, *, mode_attr: str, kp_attr: str):
-    return _resolve_kp_with_mode(
-        sp,
-        mode_attr=mode_attr,
-        kp_attr=kp_attr,
-        provider_kp=getattr(provider, kp_attr, None),
-    )
 
 def peek_issuer(root: Any) -> str | None:
     """Peek Issuer text from a SAML XML root without validation.

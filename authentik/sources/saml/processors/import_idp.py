@@ -15,7 +15,8 @@ from authentik.providers.saml.processors.feed_extract import (
 )
 from authentik.providers.saml.processors.import_sp import best_effort_display_name
 from authentik.providers.saml.utils.certrefs import sync_saml_idp_cert_refs
-from authentik.sources.saml.models import SAMLIDP, SAMLSource, SAMLIDPKeyOverrideMode
+from authentik.sources.saml.federation import SAMLIDP
+from authentik.sources.saml.models import SAMLSource
 from authentik.sources.saml.processors.idp_extract import (
     extract_idp_descriptor,
     extract_idp_slo_url,
@@ -27,29 +28,6 @@ from authentik.sources.saml.processors.snapshot import (
 )
 
 LOGGER = get_logger()
-
-
-def _should_overwrite_verification_kp(existing: SAMLIDP | None, *, overwrite: bool) -> bool:
-    """
-    Mirror SAMLSP semantics:
-      - overwrite=False: never touch existing key material
-      - freeze_verification_kp=True: never rotate automatically from metadata
-      - verification_kp_mode != INHERIT: treat as intentional local control; do not overwrite
-    """
-    if not overwrite:
-        return False
-    if existing is None:
-        return True
-
-    if bool(getattr(existing, "freeze_verification_kp", False)):
-        return False
-
-    mode = (getattr(existing, "verification_kp_mode", None) or "").strip().lower()
-    if mode and mode != SAMLIDPKeyOverrideMode.INHERIT:
-        return False
-
-    return True
-
 
 @transaction.atomic
 def import_idp_from_entity_descriptor(
@@ -142,52 +120,33 @@ def import_idp_from_entity_descriptor(
     defaults: dict[str, Any] = {
         "name": name_for_defaults,
         "enabled": enabled_final,
-        "entity_id": entity_id,
         "sso_url": sso_url,
         "slo_url": slo_url,
-        # snapshot state (always updated)
         "metadata_snapshot": snapshot,
         "metadata_hash": snapshot_hash,
         "metadata_last_import": timezone.now(),
     }
 
-    # --------------------------------------------------------
-    # verification_kp + mode (conditionally updated)
-    # --------------------------------------------------------
-    if _should_overwrite_verification_kp(existing, overwrite=overwrite):
-        # When metadata provides a cert -> SET
-        # When metadata provides none      -> INHERIT (fallback to source default behavior)
-        defaults["verification_kp"] = verification_kp
-        defaults["verification_kp_mode"] = (
-            SAMLIDPKeyOverrideMode.SET if verification_kp is not None else SAMLIDPKeyOverrideMode.INHERIT
-        )
-    else:
-        # keep existing verification_kp/mode untouched
-        if existing is not None:
-            LOGGER.debug(
-                "Skipping verification_kp update due to freeze/mode/overwrite policy",
-                source=str(source.pk),
-                entity_id=entity_id,
-                freeze_verification_kp=bool(getattr(existing, "freeze_verification_kp", False)),
-                verification_kp_mode=str(getattr(existing, "verification_kp_mode", "")),
-                overwrite=overwrite,
-            )
+    can_update_verification = True
+    if existing:
+        if getattr(existing, "freeze_verification_kp", False):
+            can_update_verification = False
+        if getattr(existing, "verification_kp_override", False):
+            can_update_verification = False
 
-    # --------------------------------------------------------
-    # Upsert
-    # --------------------------------------------------------
-    if overwrite:
-        idp, created = SAMLIDP.objects.update_or_create(
-            source=source,
-            entity_id=entity_id,
-            defaults=defaults,
-        )
-    else:
-        idp, created = SAMLIDP.objects.get_or_create(
-            source=source,
-            entity_id=entity_id,
-            defaults=defaults,
-        )
+    if can_update_verification:
+        if verification_kp is not None:
+            defaults["verification_kp"] = verification_kp
+            defaults["verification_kp_override"] = True
+        else:
+            defaults["verification_kp"] = None
+            defaults["verification_kp_override"] = False
+
+    idp, created = SAMLIDP.objects.update_or_create(
+        source=source,
+        entity_id=entity_id,
+        defaults=defaults,
+    )
 
     sync_saml_idp_cert_refs(idp)
     return idp, created

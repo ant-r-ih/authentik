@@ -14,7 +14,8 @@ Design:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING, Any
+from authentik.providers.saml.resolve import _resolve_kp_with_override
 
 if TYPE_CHECKING:
     from authentik.crypto.models import CertificateKeyPair
@@ -45,42 +46,6 @@ def _get(obj, attr: str):
     if obj is None:
         return None
     return getattr(obj, attr, None)
-
-
-def _resolve_kp_with_mode(
-    idp: "SAMLIDP | None",
-    source: "SAMLSource",
-    *,
-    mode_attr: str,
-    kp_attr: str,
-) -> "CertificateKeyPair | None":
-    """Resolve keypair with tri-state mode on SAMLIDP (if present).
-
-    mode values:
-      - "inherit": use source.<kp_attr>
-      - "set":     use idp.<kp_attr>
-      - "none":    disable keypair (None)
-
-    legacy fallback (no mode field):
-      - idp.<kp_attr> wins if present else source.<kp_attr>
-    """
-    source_kp = _get(source, kp_attr)
-    if idp is None:
-        return source_kp
-
-    mode = _norm_mode(_get(idp, mode_attr))
-    idp_kp = _get(idp, kp_attr)
-
-    if mode == "none":
-        return None
-    if mode == "set":
-        return idp_kp
-    if mode == "inherit":
-        return source_kp
-
-    # Legacy behavior
-    return idp_kp if idp_kp is not None else source_kp
-
 
 # ----------------------------
 # build_* API
@@ -129,9 +94,24 @@ def build_samlidp_config(source: "SAMLSource", idp: "SAMLIDP | None" = None) -> 
     signature_algorithm = str(_prefer_idp_attr(idp, "signature_algorithm", source.signature_algorithm))
 
     # key resolution with mode (idp-side)
-    verification_kp = _resolve_kp_with_mode(idp, source, mode_attr="verification_kp_mode", kp_attr="verification_kp")
-    signing_kp = _resolve_kp_with_mode(idp, source, mode_attr="signing_kp_mode", kp_attr="signing_kp")
-    encryption_kp = _resolve_kp_with_mode(idp, source, mode_attr="encryption_kp_mode", kp_attr="encryption_kp")
+    verification_kp = _resolve_kp_with_override(
+        idp,
+        override_attr="verification_kp_override",
+        kp_attr="verification_kp",
+        fallback_kp=getattr(source, "verification_kp", None),
+    )
+    signing_kp = _resolve_kp_with_override(
+        idp,
+        override_attr="signing_kp_override",
+        kp_attr="signing_kp",
+        fallback_kp=getattr(source, "signing_kp", None),
+    )
+    encryption_kp = _resolve_kp_with_override(
+        idp,
+        override_attr="encryption_kp_override",
+        kp_attr="encryption_kp",
+        fallback_kp=getattr(source, "encryption_kp", None),
+    )
 
     name_id_policy = str(_prefer_idp_attr(idp, "name_id_policy", source.name_id_policy))
     binding_type = str(_prefer_idp_attr(idp, "binding_type", source.binding_type))

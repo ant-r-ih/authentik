@@ -1,9 +1,13 @@
+from defusedxml import ElementTree
 from django.test import TestCase
 
 from authentik.core.tests.utils import create_test_cert, create_test_flow
 from authentik.lib.generators import generate_id
 from authentik.providers.saml.exceptions import CannotHandleAssertion
-from authentik.providers.saml.models import SAMLPropertyMapping, SAMLProvider, SAMLSP
+from authentik.providers.saml.federation import (
+    SAMLSP
+)
+from authentik.providers.saml.models import SAMLPropertyMapping, SAMLProvider
 from authentik.providers.saml.resolve import (
     ERROR_ACS_URL_MISMATCH,
     build_samlsp_config,
@@ -17,10 +21,7 @@ from authentik.sources.saml.processors.constants import (
     SAML_BINDING_POST,
     SAML_BINDING_REDIRECT,
 )
-from defusedxml import ElementTree
 
-
-# もし enum が別モジュールなら import を合わせてください
 try:
     from authentik.providers.saml.models import SAMLSPKeyOverrideMode
 except Exception:

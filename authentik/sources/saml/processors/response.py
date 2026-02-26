@@ -100,7 +100,6 @@ class ResponseProcessor:
         if self._verification_kp and self._signed_response:
             self._verify_response_signature()
 
-
         if self._encryption_kp:
             self._decrypt_response()
 

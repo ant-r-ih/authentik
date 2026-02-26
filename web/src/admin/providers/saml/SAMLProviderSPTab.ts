@@ -207,7 +207,16 @@ export class SAMLProviderSPTab extends AKElement {
   slot="form"
   kind="sp"
   .ownerPk=${this.provider.pk}
-  .ownerLabel=${this.provider.name}
+ @ak-import-finished=${async (ev: Event) => {
+     ev.stopPropagation();
+     // dual-list を最新化
+     this.loading = true;
+     try {
+         await this.fetchSPs();
+     } finally {
+         this.loading = false;
+     }
+}}
 ></ak-saml-snapshot-import>
 
                     <!-- Use authentik's standard button component for modal trigger -->

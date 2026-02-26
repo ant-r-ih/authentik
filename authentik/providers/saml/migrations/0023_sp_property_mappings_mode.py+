@@ -1,0 +1,42 @@
+from django.db import migrations, models
+
+def forwards(apps, schema_editor):
+    SAMLSP = apps.get_model("authentik_providers_saml", "SAMLSP")
+
+    for sp in SAMLSP.objects.all().only("pk", "property_mappings_override"):
+        if not sp.property_mappings_override:
+            mode = "inherit"
+        else:
+            cnt = sp.property_mappings.count()
+            mode = "none" if cnt == 0 else "set"
+        SAMLSP.objects.filter(pk=sp.pk).update(property_mappings_mode=mode)
+
+def backwards(apps, schema_editor):
+    SAMLSP = apps.get_model("authentik_providers_saml", "SAMLSP")
+
+    for sp in SAMLSP.objects.all().only("pk", "property_mappings_mode"):
+        mode = (sp.property_mappings_mode or "inherit").lower()
+        override = mode != "inherit"
+        SAMLSP.objects.filter(pk=sp.pk).update(property_mappings_override=override)
+
+class Migration(migrations.Migration):
+    dependencies = [
+        ("authentik_providers_saml", "0022_alter_samlsp_options_and_more"),
+    ]
+
+    operations = [
+        migrations.AddField(
+            model_name="samlsp",
+            name="property_mappings_mode",
+            field=models.CharField(
+                max_length=16,
+                default="inherit",
+                choices=[
+                    ("inherit", "Inherit"),
+                    ("set", "Set"),
+                    ("none", "None"),
+                ],
+            ),
+        ),
+        migrations.RunPython(forwards, backwards),
+    ]

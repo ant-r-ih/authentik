@@ -8,7 +8,8 @@ from lxml import etree  # nosec
 
 from authentik.core.tests.utils import RequestFactory, create_test_flow
 from authentik.lib.generators import generate_id
-from authentik.sources.saml.models import SAMLBindingTypes, SAMLIDP, SAMLSource
+from authentik.sources.saml.federation import SAMLIDP
+from authentik.sources.saml.models import SAMLBindingTypes, SAMLSource
 
 # view name: authentik_sources_saml:login  (urls.py で name="login")
 

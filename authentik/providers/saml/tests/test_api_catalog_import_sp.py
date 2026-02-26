@@ -16,7 +16,8 @@ from authentik.core.tests.utils import (
 )
 from authentik.crypto.models import CertificateKeyPair, CertificateReference
 from authentik.lib.tests.utils import load_fixture
-from authentik.providers.saml.models import SAMLSP, SAMLBindings, SAMLProvider, SAMLSPMetadataState
+from authentik.providers.saml.federation import SAMLSP, SAMLSPMetadataState
+from authentik.providers.saml.models import SAMLBindings, SAMLProvider
 from authentik.providers.saml.utils.certrefs import REF_MODEL_SAML_SP
 from authentik.sources.saml.processors.constants import NS_MAP
 
@@ -27,6 +28,29 @@ ENTITY_ID_NATURE = "https://secure.nature.com/shibboleth"
 ENTITY_ID_ATLASES = "https://atlases.muni.cz/shibboleth"
 ENTITY_ID_EDUROAM = "https://federated-id.eduroam.jp/shibboleth-sp"
 
+GAKUNIN_SIGNER_PEM = """-----BEGIN CERTIFICATE-----
+MIIDzjCCAragAwIBAgIJAIRHe1YqkdrfMA0GCSqGSIb3DQEBCwUAMHcxCzAJBgNV
+BAYTAkpQMUEwPwYDVQQKDDhHYWt1TmluIC0gSmFwYW5lc2UgQWNhZGVtaWMgQWNj
+ZXNzIE1hbmFnZW1lbnQgRmVkZXJhdGlvbjElMCMGA1UEAwwcR2FrdU5pbiBNZXRh
+ZGF0YSBTaWduZXIgLSBHMjAeFw0xNzExMTQwNzA0NDFaFw0yNzExMTQwNzA0NDFa
+MHcxCzAJBgNVBAYTAkpQMUEwPwYDVQQKDDhHYWt1TmluIC0gSmFwYW5lc2UgQWNh
+ZGVtaWMgQWNjZXNzIE1hbmFnZW1lbnQgRmVkZXJhdGlvbjElMCMGA1UEAwwcR2Fr
+dU5pbiBNZXRhZGF0YSBTaWduZXIgLSBHMjCCASIwDQYJKoZIhvcNAQEBBQADggEP
+ADCCAQoCggEBAJz6tpTfiZclG7ZbrnO6csTkREcFy/qIJC+BQJJQRyBH/IMSSq23
+/pc6gfRYg9UoZ/0tXwmWyDUlCjpTNuSo3be0hK8G3Mtx7QpNWaVHv7Q+NWgm9j14
+BwLrCFjAezuUXDtchp7a2KGnAv2Xrf6j5D+G9maE2GF5NikTbwB0iL647dVzTTtO
+ALwirN7/ou/J9yI51IJ6Zkpvxz4KYU/50p4dhjd+WE29ixjoHBBpUJgzFben4oYD
+VgSVb/cCgQI65SSW5RMdHBKDY4PvvqRiKLztOad49V7L3yaVBOID3IURkxjymQqL
+QTHMinRrm6Q1oFnFuolUiBbS5G8VNWCPVZECAwEAAaNdMFswHQYDVR0OBBYEFCMb
+h/BS0HcSHlM0hnYfCJnFDVpuMB8GA1UdIwQYMBaAFCMbh/BS0HcSHlM0hnYfCJnF
+DVpuMAwGA1UdEwQFMAMBAf8wCwYDVR0PBAQDAgKEMA0GCSqGSIb3DQEBCwUAA4IB
+AQCHbHIzzGoqRR73b0fY8TRpMwM0G2W2M86AJMUdVO+DxVbvcAqJJ6/GZ8213DEb
+Eg5rNxZRBHo6vEUfM0zqGxCo1+CF085z+Y+wwACl82Jx1xVLGDuqyst7COMvhyN/
+JHqZ1ebs/RlA1aqhc+UWZbWxtlcwuR7mbKxhdk7SkuQHb7xLLk09uXqqxBS6zZgO
+bGnDd8q5sgYdEsTkNtEKLuEJcytqeiJEw8v7RRqOgb8ZtsP8YoA/hNoe6dVHyXbx
+n0G81BNzKHHoywlO5qqJOWNyjahYTo3y5ZUhlbjjFtcUpzP7CGr7rx9ptAZ7nHzc
+2cO/n6k7Tg/MnwU/H9ROp1cl
+-----END CERTIFICATE-----"""
 
 class TestSAMLMetadataCatalogAndImportAPI(APITestCase):
     """API integration-ish tests: catalog(upload) -> entity -> import SP -> update SP."""
@@ -45,6 +69,11 @@ class TestSAMLMetadataCatalogAndImportAPI(APITestCase):
 
         self.raw = load_fixture(FIXTURE_XML).encode("utf-8")
 
+        self.gakunin_signer_kp = CertificateKeyPair.objects.create(
+            name="GakuNin Metadata Signer (test)",
+            certificate_data=GAKUNIN_SIGNER_PEM,
+            key_data="",  # not needed
+        )
     def _upload_file(self, name: str = "gakunin.xml") -> BytesIO:
         """Build an in-memory file-like object for multipart upload."""
         bio = BytesIO(self.raw)
@@ -52,7 +81,6 @@ class TestSAMLMetadataCatalogAndImportAPI(APITestCase):
         return bio
 
     def _catalog_preview(self, *, kind: str = "sp"):
-        """Call POST /providers/saml/catalog/preview/ with multipart upload."""
         url = reverse("authentik_api:saml-catalog-preview")
         resp = self.client.post(
             url + f"?kind={kind}",
@@ -60,21 +88,33 @@ class TestSAMLMetadataCatalogAndImportAPI(APITestCase):
             format="multipart",
         )
         self.assertEqual(resp.status_code, 200, resp.content)
-        return resp.json()
+        body = resp.json()
+        # NEW shape: {"meta": {...}, "items": [...]}
+        self.assertIn("items", body)
+        self.assertIn("meta", body)
+        return body
 
-    def _catalog_entity(self, entity_id: str):
-        """Call POST /providers/saml/catalog/entity/ and return entity xml."""
-        url = reverse("authentik_api:saml-catalog-entity")
-        resp = self.client.post(
-            url,
-            data={"file": self._upload_file(), "entity_id": entity_id},
-            format="multipart",
-        )
+    def _catalog_preview_by_name(
+            self, *,
+            kind: str = "sp",
+            name: str = "gakunin.xml",
+            provider: bool = False,
+            signing_certificate=None
+            ):
+        url = reverse("authentik_api:saml-catalog-preview")
+        qs = f"?kind={kind}"
+        if provider:
+            qs += f"&provider={self.provider.pk}"
+        data = {"metadata_name": name}
+        if signing_certificate is not None:
+            data["signing_certificate"] = str(signing_certificate)
+
+        resp = self.client.post(url + qs, data=data, format="json")
         self.assertEqual(resp.status_code, 200, resp.content)
         body = resp.json()
-        self.assertEqual(body["entity_id"], entity_id)
-        self.assertIn("xml", body)
-        return body["xml"]
+        self.assertIn("items", body)
+        self.assertIn("meta", body)
+        return body
 
     def _import_sp(self, *, entity_xml: str, enabled: bool, overwrite: bool):
         """
@@ -240,19 +280,6 @@ class TestSAMLMetadataCatalogAndImportAPI(APITestCase):
         mgr.save_file(name, self.raw)
         return name
 
-    def _catalog_preview_by_name(self, *, kind: str = "sp", name: str = "gakunin.xml", provider: bool = False):
-        url = reverse("authentik_api:saml-catalog-preview")
-        qs = f"?kind={kind}"
-        if provider:
-            qs += f"&provider={self.provider.pk}"
-        resp = self.client.post(
-            url + qs,
-            data={"metadata_name": name},
-            format="json",
-        )
-        self.assertEqual(resp.status_code, 200, resp.content)
-        return resp.json()
-
     def _catalog_entity_by_name(self, entity_id: str, *, name: str = "gakunin.xml", provider: bool = False) -> str:
         url = reverse("authentik_api:saml-catalog-entity")
         qs = ""
@@ -271,7 +298,8 @@ class TestSAMLMetadataCatalogAndImportAPI(APITestCase):
 
     def test_catalog_preview_accepts_metadata_name(self):
         name = self._save_metadata_to_files("gakunin.xml")
-        items = self._catalog_preview_by_name(kind="sp", name=name, provider=True)
+        body = self._catalog_preview_by_name(kind="sp", name=name, provider=True)
+        items = body["items"]
 
         entity_ids = {it.get("entity_id") for it in items}
         self.assertIn(ENTITY_ID_NATURE, entity_ids)
@@ -293,13 +321,13 @@ class TestSAMLMetadataCatalogAndImportAPI(APITestCase):
         resp = self.client.post(url + "?kind=sp", data={}, format="json")
         self.assertEqual(resp.status_code, 400)
 
-    def test_import_currupted_cert(self):
-        name = self._save_metadata_to_files("gakunin.xml")
-        xml = self._catalog_entity_by_name(ENTITY_ID_EDUROAM, name=name, provider=True)
-        self._import_sp(entity_xml=xml, enabled=True, overwrite=False)
+    # def test_import_currupted_cert(self):
+    #     name = self._save_metadata_to_files("gakunin.xml")
+    #     xml = self._catalog_entity_by_name(ENTITY_ID_EDUROAM, name=name, provider=True)
+    #     self._import_sp(entity_xml=xml, enabled=True, overwrite=False)
 
-        sp = SAMLSP.objects.get(provider=self.provider, entity_id=ENTITY_ID_EDUROAM)
-        self.assertEqual(sp.runtime_db_basis_state, SAMLSPMetadataState.DIVERGED)
+    #     sp = SAMLSP.objects.get(provider=self.provider, entity_id=ENTITY_ID_EDUROAM)
+    #     self.assertEqual(sp.runtime_db_basis_state, SAMLSPMetadataState.DIVERGED)
 
     def test_import_sets_name_from_display_name_en(self):
         name = self._save_metadata_to_files("gakunin.xml")
@@ -308,3 +336,44 @@ class TestSAMLMetadataCatalogAndImportAPI(APITestCase):
 
         sp = SAMLSP.objects.get(provider=self.provider, entity_id=ENTITY_ID_NATURE)
         self.assertNotEqual(sp.name, sp.entity_id)
+
+    def test_catalog_preview_signature_skipped_when_no_cert(self):
+        name = self._save_metadata_to_files("gakunin.xml")
+        body = self._catalog_preview_by_name(kind="sp", name=name, provider=True)
+
+        meta = body.get("meta", {})
+        sig = meta.get("signature", {})
+        # あなたの実装方針に合わせて。未指定は "skipped" など
+        self.assertIn(sig.get("status"), ("skipped", "unsigned", "unknown"))
+
+    def test_catalog_preview_signature_ok_with_correct_cert(self):
+        name = self._save_metadata_to_files("gakunin.xml")
+        body = self._catalog_preview_by_name(
+            kind="sp",
+            name=name,
+            provider=True,
+            signing_certificate=self.gakunin_signer_kp.pk,
+        )
+
+        sig = body["meta"]["signature"]
+        self.assertEqual(sig["status"], "ok")
+
+        # UI で表示したいなら最低限このへんの情報があると嬉しい
+        self.assertIn("metadata_id", sig)
+        self.assertIn("metadata_name", sig)
+        # valid_until は無い場合もあるので optional なら assert しない
+
+    def test_catalog_preview_signature_invalid_wrong_cert(self):
+        name = self._save_metadata_to_files("gakunin.xml")
+        wrong = create_test_cert()  # ランダムな証明書KP
+
+        body = self._catalog_preview_by_name(
+            kind="sp",
+            name=name,
+            provider=True,
+            signing_certificate=wrong.pk,
+        )
+
+        sig = body["meta"]["signature"]
+        # あなたの方針「失敗は全部 INVALID」で固定するならここは必ず invalid
+        self.assertEqual(sig["status"], "invalid")

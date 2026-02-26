@@ -7,7 +7,12 @@ from rest_framework.test import APIClient
 from authentik.core.tests.utils import create_test_admin_user, create_test_cert, create_test_flow
 from authentik.crypto.models import CertificateReference
 from authentik.lib.generators import generate_id
-from authentik.providers.saml.models import SAMLSP, SAMLProvider, SAMLSPKeyOverrideMode
+from authentik.providers.saml.federation import (
+    SAMLSP,
+    compute_signature_hash,
+    normalize_signature,
+)
+from authentik.providers.saml.models import SAMLProvider
 from authentik.providers.saml.utils.certrefs import REF_MODEL_SAML_SP, sync_saml_sp_cert_refs
 
 
@@ -37,7 +42,7 @@ class TestSAMLSPBulkDelete(TestCase):
             enabled=True,
             acs_url="https://sp.example/acs",
             verification_kp=kp,
-            verification_kp_mode=SAMLSPKeyOverrideMode.SET,
+            verification_kp_override=True,
         )
         sync_saml_sp_cert_refs(sp)
         # print("sp.pk=", sp.pk, "verification_kp_id=", sp.verification_kp_id, "encryption_kp_id=", sp.encryption_kp_id)

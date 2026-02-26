@@ -9,8 +9,8 @@ from structlog.stdlib import get_logger
 from authentik.core.models import AuthenticatedSession, User
 from authentik.flows.models import in_memory_stage
 from authentik.providers.iframe_logout import IframeLogoutStageView
+from authentik.providers.saml.federation import SAMLSP
 from authentik.providers.saml.models import (
-    SAMLSP,
     SAMLBindings,
     SAMLLogoutMethods,
     SAMLProvider,
@@ -267,7 +267,6 @@ def user_deactivated_saml_logout(sender, instance: User, **kwargs):
             name_id_format=saml_session.name_id_format,
             session_index=saml_session.session_index,
         )
-
 
 def get_samlsp(session: SAMLSession) -> SAMLProvider | SAMLSP:
     if session.samlsp is None:

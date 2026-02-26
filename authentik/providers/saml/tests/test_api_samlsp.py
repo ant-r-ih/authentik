@@ -6,7 +6,10 @@ from rest_framework.test import APITestCase
 from authentik.core.tests.utils import create_test_admin_user, create_test_cert, create_test_flow
 from authentik.crypto.models import REF_MODEL_SAML_SP, CertificateReference
 from authentik.lib.generators import generate_id
-from authentik.providers.saml.models import SAMLSP, SAMLProvider,SAMLSPKeyOverrideMode
+from authentik.providers.saml.federation import (
+    SAMLSP,
+)
+from authentik.providers.saml.models import SAMLSP, SAMLProvider
 
 
 class TestSAMLProviderAPI(APITestCase):
@@ -124,9 +127,9 @@ class TestSAMLProviderAPI(APITestCase):
         self._assert_cert_ref_exists(vcert1, sp, "saml.verification")
         self._assert_cert_ref_exists(ecert1, sp, "saml.encryption")
         self._assert_cert_ref_exists(scert1, sp, "saml.signing")
-        self.assertEqual(sp.verification_kp_mode, SAMLSPKeyOverrideMode.SET)
-        self.assertEqual(sp.encryption_kp_mode, SAMLSPKeyOverrideMode.SET)
-        self.assertEqual(sp.signing_kp_mode, SAMLSPKeyOverrideMode.SET)
+        self.assertEqual(sp.verification_kp_override, True)
+        self.assertEqual(sp.encryption_kp_override, True)
+        self.assertEqual(sp.signing_kp_override, True)
 
         # --- Patch: rotate verification_kp -> cert2
         patch_resp0 = self.client.patch(
@@ -163,7 +166,7 @@ class TestSAMLProviderAPI(APITestCase):
 
         self._assert_cert_ref_exists(scert1, sp, "saml.signing", count=0)
         self._assert_cert_ref_exists(scert2, sp, "saml.signing", count=1)
-        self.assertEqual(sp.signing_kp_mode, SAMLSPKeyOverrideMode.SET)
+        self.assertEqual(sp.signing_kp_override, True)
 
 
         # --- Patch: unset -> reference removed
@@ -176,7 +179,7 @@ class TestSAMLProviderAPI(APITestCase):
         sp.refresh_from_db()
 
         self._assert_cert_ref_exists(vcert2, sp, "saml.verification", count=0)
-        self.assertEqual(sp.verification_kp_mode, SAMLSPKeyOverrideMode.INHERIT)
+        self.assertEqual(sp.verification_kp_override, True)
         # --- Patch: unset -> reference removed
         patch_resp4 = self.client.patch(
             reverse("authentik_api:samlsp-detail", kwargs={"uuid": sp.uuid}),
@@ -187,7 +190,7 @@ class TestSAMLProviderAPI(APITestCase):
         sp.refresh_from_db()
 
         self._assert_cert_ref_exists(ecert2, sp, "saml.encryption", count=0)
-        self.assertEqual(sp.encryption_kp_mode, SAMLSPKeyOverrideMode.INHERIT)
+        self.assertEqual(sp.encryption_kp_override, True)
 
         # --- Patch: unset signing -> reference removed
         patch_resp5 = self.client.patch(
@@ -199,7 +202,7 @@ class TestSAMLProviderAPI(APITestCase):
         sp.refresh_from_db()
 
         self._assert_cert_ref_exists(scert2, sp, "saml.signing", count=0)
-        self.assertEqual(sp.signing_kp_mode, SAMLSPKeyOverrideMode.INHERIT)
+        self.assertEqual(sp.signing_kp_override, True)
 
     def test_list_filtering(self):
         """Basic list endpoint works and can filter by provider/enabled."""

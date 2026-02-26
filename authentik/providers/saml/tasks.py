@@ -5,7 +5,8 @@ from django.contrib.auth import get_user_model
 from dramatiq.actor import actor
 from structlog.stdlib import get_logger
 
-from authentik.providers.saml.models import SAMLSP, SAMLProvider
+from authentik.providers.saml.federation import SAMLSP
+from authentik.providers.saml.models import SAMLProvider
 from authentik.providers.saml.processors.logout_request import LogoutRequestProcessor
 
 LOGGER = get_logger()
@@ -21,10 +22,8 @@ def send_saml_logout_request(
     session_index: str,
 ):
     """Send SAML LogoutRequest to a Service Provider using session data"""
-    provider = (
-        SAMLProvider.objects.filter(pk=provider_pk).first()
-        | SAMLSP.objects.filter(pk=provider_pk).first()
-    )
+    provider = ( SAMLProvider.objects.filter(pk=provider_pk).first()
+        | SAMLSP.objects.filter(pk=provider_pk).first())
     if not provider:
         LOGGER.error(
             "Provider not found for SAML logout request",
@@ -52,9 +51,8 @@ def send_saml_logout_request(
     return send_post_logout_request(provider, processor)
 
 
-def send_post_logout_request(
-    provider: SAMLProvider | SAMLSP, processor: LogoutRequestProcessor
-) -> bool:
+def send_post_logout_request(provider: SAMLProvider
+    | SAMLSP, processor: LogoutRequestProcessor) -> bool:
     """Send LogoutRequest using POST binding"""
     encoded_request = processor.encode_post()
 

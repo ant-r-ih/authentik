@@ -9,11 +9,13 @@ from django.urls import reverse
 from rest_framework.test import APITestCase
 
 from authentik.core.tests.utils import create_test_admin_user, create_test_flow, generate_id
-from authentik.providers.saml.models import (
+from authentik.providers.saml.federation import (
     SAMLSP,
-    SAMLProvider,
     compute_signature_hash,
     normalize_signature,
+)
+from authentik.providers.saml.models import (
+    SAMLProvider,
 )
 from authentik.providers.saml.processors.feed import iter_entity_descriptors
 from authentik.providers.saml.processors.feed_extract import (

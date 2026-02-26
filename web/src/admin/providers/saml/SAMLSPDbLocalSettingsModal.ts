@@ -12,9 +12,8 @@
 //
 // Key UI policy (important):
 // - No keypair selector in UI
-// - ON  => inherit provider behavior (verification_kp_mode/encryption_kp_mode/signing_kp_mode = "inherit")
-// - OFF => force disable for this SP (mode = "none")
-// - We do NOT modify *_kp FK here (kept as-is for future "SET" UI).
+// - ON  => inherit provider behavior (override=false)
+// - OFF => force disable for this SP (override=true, kp=null)
 //
 // Notes:
 // - This is NOT an overlay modal; it is rendered inline under a row.
@@ -36,14 +35,14 @@ import { DEFAULT_CONFIG } from "#common/api/config";
 
 import { propertyMappingsProvider, propertyMappingsSelector } from "./SAMLProviderFormHelpers.js";
 
-type KPMode = "inherit" | "set" | "none" | string;
-
 type SavedDetail = {
     spUuid: string;
     applied: {
         propertyMappingsOverride: boolean;
         propertyMappings: string[];
 
+        // true = inherit provider behavior
+        // false = force-disable for this SP
         verificationKeyEnabled: boolean;
         encryptionKeyEnabled: boolean;
         signingKeyEnabled: boolean;
@@ -56,9 +55,14 @@ type PatchLocalSettingsBody = {
     property_mappings_override?: boolean;
     property_mappings?: string[];
 
-    verification_kp_mode?: KPMode;
-    encryption_kp_mode?: KPMode;
-    signing_kp_mode?: KPMode;
+    verification_kp_override?: boolean;
+    encryption_kp_override?: boolean;
+    signing_kp_override?: boolean;
+
+    // OFF => disable must explicitly clear local kp
+    verification_kp?: string | null;
+    encryption_kp?: string | null;
+    signing_kp?: string | null;
 };
 
 async function readErrorBody(res: Response): Promise<string> {
@@ -84,16 +88,6 @@ function apiBasePath(): string {
     return (DEFAULT_CONFIG.basePath ?? "/api/v3").replace(/\/$/, "");
 }
 
-function enabledToMode(enabled: boolean): KPMode {
-    return enabled ? "inherit" : "none";
-}
-
-function modeToEnabled(mode: KPMode | null | undefined): boolean {
-    // inherit/set => ON, none => OFF
-    if (!mode) return true;
-    return String(mode).toLowerCase().trim() !== "none";
-}
-
 async function patchSamlspLocalSettings(
     providerPk: number,
     spUuid: string,
@@ -114,14 +108,27 @@ async function patchSamlspLocalSettings(
         window.location.origin,
     );
 
+    // UI semantics:
+    // enabled=true  => override=false (inherit)
+    // enabled=false => override=true  (force-disable)
+    const verificationOverride = !localSettings.verificationKeyEnabled;
+    const encryptionOverride = !localSettings.encryptionKeyEnabled;
+    const signingOverride = !localSettings.signingKeyEnabled;
+
     const body: PatchLocalSettingsBody = {
         provider: providerPk,
         property_mappings_override: localSettings.propertyMappingsOverride,
 
-        verification_kp_mode: enabledToMode(localSettings.verificationKeyEnabled),
-        encryption_kp_mode: enabledToMode(localSettings.encryptionKeyEnabled),
-        signing_kp_mode: enabledToMode(localSettings.signingKeyEnabled),
+        verification_kp_override: verificationOverride,
+        encryption_kp_override: encryptionOverride,
+        signing_kp_override: signingOverride,
     };
+
+    // override=true means "use local setting", and since UI has no selector,
+    // local setting is "disabled" => must clear kp explicitly.
+    if (verificationOverride) body.verification_kp = null;
+    if (encryptionOverride) body.encryption_kp = null;
+    if (signingOverride) body.signing_kp = null;
 
     // override=true のときは空配列も意味があるので送る
     if (localSettings.propertyMappingsOverride) {
@@ -172,14 +179,16 @@ export class SAMLSPDbLocalSettingsModal extends AKElement {
     propertyMappings: string[] = [];
 
     // Parent passes these (DB row snapshot). UI uses ON/OFF only.
-    @property({ type: String, attribute: false })
-    verificationKpMode: KPMode | null = null;
+    // override=false => ON (inherit)
+    // override=true  => OFF (force-disable)
+    @property({ type: Boolean })
+    verificationKpOverride = false;
 
-    @property({ type: String, attribute: false })
-    encryptionKpMode: KPMode | null = null;
+    @property({ type: Boolean })
+    encryptionKpOverride = false;
 
-    @property({ type: String, attribute: false })
-    signingKpMode: KPMode | null = null;
+    @property({ type: Boolean })
+    signingKpOverride = false;
 
     // ----- local edit state -----
 
@@ -192,6 +201,7 @@ export class SAMLSPDbLocalSettingsModal extends AKElement {
     @state()
     private editPropertyMappings: string[] = [];
 
+    // ON/OFF-only UI
     @state()
     private editVerificationKeyEnabled = true;
 
@@ -215,9 +225,9 @@ export class SAMLSPDbLocalSettingsModal extends AKElement {
                 changed.has("spUuid") ||
                 changed.has("propertyMappingsOverride") ||
                 changed.has("propertyMappings") ||
-                changed.has("verificationKpMode") ||
-                changed.has("encryptionKpMode") ||
-                changed.has("signingKpMode"));
+                changed.has("verificationKpOverride") ||
+                changed.has("encryptionKpOverride") ||
+                changed.has("signingKpOverride"));
 
         if (!shouldInit) return;
         if (this.initializedForKey === identityKey) return;
@@ -227,9 +237,11 @@ export class SAMLSPDbLocalSettingsModal extends AKElement {
             ? this.propertyMappings.map(String)
             : [];
 
-        this.editVerificationKeyEnabled = modeToEnabled(this.verificationKpMode);
-        this.editEncryptionKeyEnabled = modeToEnabled(this.encryptionKpMode);
-        this.editSigningKeyEnabled = modeToEnabled(this.signingKpMode);
+        // override=false => ON (inherit)
+        // override=true  => OFF (force-disable)
+        this.editVerificationKeyEnabled = !(this.verificationKpOverride ?? false);
+        this.editEncryptionKeyEnabled = !(this.encryptionKpOverride ?? false);
+        this.editSigningKeyEnabled = !(this.signingKpOverride ?? false);
 
         this.initializedForKey = identityKey;
     }
@@ -338,6 +350,7 @@ export class SAMLSPDbLocalSettingsModal extends AKElement {
         const applied = {
             propertyMappingsOverride: !!this.editPropertyMappingsOverride,
             propertyMappings: [...this.editPropertyMappings],
+
             verificationKeyEnabled: !!this.editVerificationKeyEnabled,
             encryptionKeyEnabled: !!this.editEncryptionKeyEnabled,
             signingKeyEnabled: !!this.editSigningKeyEnabled,
@@ -397,7 +410,12 @@ export class SAMLSPDbLocalSettingsModal extends AKElement {
                 </header>
 
                 <div class="pf-c-modal-box__body" style="padding: 10px 0 0 0;">
-                    <div class="pf-c-form" @submit=${this.swallow} @ak-form-submit=${this.swallow} @ak-submit=${this.swallow}>
+                    <div
+                        class="pf-c-form"
+                        @submit=${this.swallow}
+                        @ak-form-submit=${this.swallow}
+                        @ak-submit=${this.swallow}
+                    >
                         <ak-switch-input
                             name="propertyMappingsOverride"
                             label=${msg("Property mappings override")}
@@ -467,7 +485,7 @@ export class SAMLSPDbLocalSettingsModal extends AKElement {
                             }}
                         ></ak-switch-input>
                         <p class="pf-c-form__helper-text" style="margin-top: -8px; margin-bottom: 12px;">
-                            ${msg("ON uses provider default behavior. OFF forces disable for this SP.")}
+                            ${msg("ON uses provider default behavior (automatic if configured). OFF forces disable for this SP.")}
                         </p>
 
                         <ak-switch-input
@@ -487,7 +505,7 @@ export class SAMLSPDbLocalSettingsModal extends AKElement {
                             }}
                         ></ak-switch-input>
                         <p class="pf-c-form__helper-text" style="margin-top: -8px; margin-bottom: 12px;">
-                            ${msg("ON uses provider default behavior. OFF forces disable for this SP.")}
+                            ${msg("ON uses provider default behavior (automatic if configured). OFF forces disable for this SP.")}
                         </p>
 
                         <ak-switch-input
@@ -507,12 +525,15 @@ export class SAMLSPDbLocalSettingsModal extends AKElement {
                             }}
                         ></ak-switch-input>
                         <p class="pf-c-form__helper-text" style="margin-top: -8px;">
-                            ${msg("ON uses provider default behavior. OFF forces disable for this SP.")}
+                            ${msg("ON uses provider default behavior (automatic if configured). OFF forces disable for this SP.")}
                         </p>
                     </div>
                 </div>
 
-                <footer class="pf-c-modal-box__footer" style="padding: 12px 0 0 0; border-top: 1px solid var(--pf-global--BorderColor--100);">
+                <footer
+                    class="pf-c-modal-box__footer"
+                    style="padding: 12px 0 0 0; border-top: 1px solid var(--pf-global--BorderColor--100);"
+                >
                     <div style="display:flex; gap: 10px; justify-content:flex-end;">
                         <ak-spinner-button
                             type="button"

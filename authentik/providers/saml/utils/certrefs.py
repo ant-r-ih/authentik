@@ -9,8 +9,10 @@ from authentik.crypto.models import (
     CertificateKeyPair,
     CertificateReference,
 )
-from authentik.providers.saml.models import SAMLSP, SAMLProvider, SAMLSPKeyOverrideMode
-from authentik.sources.saml.models import SAMLIDP, SAMLSource
+from authentik.providers.saml.federation import SAMLSP
+from authentik.sources.saml.federation import SAMLIDP
+from authentik.providers.saml.models import SAMLProvider
+from authentik.sources.saml.models import SAMLSource
 
 LOGGER = get_logger()
 
@@ -61,54 +63,23 @@ def sync_saml_provider_cert_refs(provider: SAMLProvider) -> None:
         ignore_conflicts=True,
     )
 
-def sync_saml_sp_cert_refs(sp: "SAMLSP") -> None:
-    """Ensure CertificateReference rows for SAMLSP match current *effective local* config.
-
-    Notes:
-    - SAMLSP refs represent local (SP-level) configured cert usage only.
-    - If *_kp_mode == INHERIT, we do not create a local ref (provider refs cover that).
-    - If *_kp_mode == NONE, we do not create a local ref.
-    - If *_kp_mode == SET, we create a local ref if local FK exists.
-    """
+def sync_saml_sp_cert_refs(sp: SAMLSP) -> None:
     if not sp.pk:
         return
 
-    desired: set[tuple[str, str]] = set()  # (cert_pk, usage)
+    desired: set[tuple[str, str]] = set()
+    if sp.verification_kp_id:
+        desired.add((str(sp.verification_kp_id), CertificateReference.Usage.SAML_VERIFICATION))
+    if sp.signing_kp_id:
+        desired.add((str(sp.signing_kp_id), CertificateReference.Usage.SAML_SIGNING))
+    if sp.encryption_kp_id:
+        desired.add((str(sp.encryption_kp_id), CertificateReference.Usage.SAML_ENCRYPTION))
 
-    # Verification certificate (SP-local only when mode=SET)
-    if (
-        getattr(sp, "verification_kp_mode", None) == SAMLSPKeyOverrideMode.SET
-        and getattr(sp, "verification_kp_id", None)
-    ):
-        desired.add(
-            (str(sp.verification_kp_id), CertificateReference.Usage.SAML_VERIFICATION)
-        )
-
-    # Encryption certificate (SP-local only when mode=SET)
-    if (
-        getattr(sp, "encryption_kp_mode", None) == SAMLSPKeyOverrideMode.SET
-        and getattr(sp, "encryption_kp_id", None)
-    ):
-        desired.add(
-            (str(sp.encryption_kp_id), CertificateReference.Usage.SAML_ENCRYPTION)
-        )
-
-    # Signing certificate (if you add signing_kp + usage enum)
-    if hasattr(sp, "signing_kp_mode") and hasattr(sp, "signing_kp_id"):
-        if (
-            sp.signing_kp_mode == SAMLSPKeyOverrideMode.SET
-            and sp.signing_kp_id
-        ):
-            desired.add(
-                (str(sp.signing_kp_id), CertificateReference.Usage.SAML_SIGNING)
-            )
-
-    existing = CertificateReference.objects.filter(
+    existing_qs = CertificateReference.objects.filter(
         ref_model=REF_MODEL_SAML_SP,
         ref_pk=str(sp.pk),
-    ).values_list("certificate_id", "usage")
-
-    existing_set = {(str(cid), usage) for cid, usage in existing}
+    )
+    existing_set = set(existing_qs.values_list("certificate_id", "usage"))
 
     to_add = desired - existing_set
     to_del = existing_set - desired
@@ -117,10 +88,7 @@ def sync_saml_sp_cert_refs(sp: "SAMLSP") -> None:
         q = Q()
         for cid, usage in to_del:
             q |= Q(certificate_id=cid, usage=usage)
-        CertificateReference.objects.filter(
-            ref_model=REF_MODEL_SAML_SP,
-            ref_pk=str(sp.pk),
-        ).filter(q).delete()
+        existing_qs.filter(q).delete()
 
     if not to_add:
         return

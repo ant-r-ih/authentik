@@ -1,7 +1,6 @@
 // authentik/web/src/admin/providers/saml/SAMLSPSnapshotImport.ts
 //
 // Common SnapshotImport for SAML SP/IdP (kind switch).
-// SP works today. IdP paths are TODO until backend endpoints exist.
 //
 // Policy (updated):
 // - "Local settings" opens an inline editor panel (no overlay modal)
@@ -9,6 +8,18 @@
 // - Panel Cancel/Close => no DB change
 // - SnapshotImport no longer stages DB-local settings for Apply
 // - SnapshotImport still manages preview/import/delete staging
+//
+// Additions in this version:
+// - Signature verification controls:
+//   - Verify signature (switch)
+//   - Signing certificate (optional) via ak-crypto-certificate-search
+// - Preview/entity calls include verify_signature + signing_certificate (pk) when enabled
+// - Signature result banner is shown from backend meta.signature (if present)
+// - Row merge policy (A):
+//   - Preview + DB are merged by normalized entity_id
+//   - A merged row is a DB row (uuid is preserved) with current-state coming from preview
+//   - Stage import can apply to BOTH preview-only rows and merged DB rows
+// - Row layout: checkbox alignment hardened (line-height:0 + align-items:center) to avoid Safari drift
 
 import { customElement, property, state } from "lit/decorators.js";
 import { html, nothing, type TemplateResult } from "lit";
@@ -20,6 +31,9 @@ import "#elements/buttons/SpinnerButton/index";
 import "#components/ak-file-search-input";
 import "#admin/providers/saml/SAMLSPDbLocalSettingsModal";
 import "#admin/sources/saml/SAMLIDPDbLocalSettingsModal";
+
+import "#components/ak-switch-input";
+import "#admin/common/ak-crypto-certificate-search";
 
 import { Form } from "#elements/forms/Form";
 import { showMessage } from "#elements/messages/MessageContainer";
@@ -55,15 +69,18 @@ type RowKind = "db" | "preview";
 type PlannedAction = "none" | "import" | "delete";
 type Kind = "sp" | "idp";
 
-type SAMLSPImportLocalSettings = {
-    propertyMappingsOverride?: boolean;
-    propertyMappings?: string[]; // mapping pk[]
-};
+type SignatureStatus = "ok" | "stale" | "invalid" | "unsigned" | "skipped" | "error" | string;
 
-type RowLocalSettingsSummary =
-    | { mode: "inherit" }
-    | { mode: "none" }
-    | { mode: "set"; count: number };
+type SignatureMeta = {
+    status: SignatureStatus;
+    message?: string;
+    metadata_id?: string | null;
+    metadata_name?: string | null;
+    root_tag?: string | null;
+    valid_until?: string | null;
+    is_stale?: boolean;
+    signature_nodes?: number;
+};
 
 type SAMLMetadataCatalogItem = {
     entity_id: string;
@@ -77,11 +94,33 @@ type SAMLMetadataCatalogItem = {
     };
 };
 
+type CatalogPreviewResponse = {
+    meta?: {
+        signature?: SignatureMeta;
+    };
+    items: SAMLMetadataCatalogItem[];
+};
+
 type CatalogEntityResponse = {
     entity_id: string;
     xml: string;
     container_name_chain?: string[];
 };
+
+type CatalogOptions = {
+    verifySignature?: boolean;
+    signingCertificate?: string | null; // CertificateKeyPair.pk (stringified)
+};
+
+type SAMLSPImportLocalSettings = {
+    propertyMappingsOverride?: boolean;
+    propertyMappings?: string[]; // mapping pk[]
+};
+
+type RowLocalSettingsSummary =
+    | { mode: "inherit" }
+    | { mode: "none" }
+    | { mode: "set"; count: number };
 
 // unified managed-list row (DB)
 type ManagedItem = {
@@ -91,26 +130,60 @@ type ManagedItem = {
     property_mappings_override?: boolean;
     property_mappings?: string[];
 
+    // SP: new boolean overrides (preferred)
+    verification_kp_override?: boolean | null;
+    encryption_kp_override?: boolean | null;
+    signing_kp_override?: boolean | null;
+
+    // legacy IdP style / or older SP builds (kept for compatibility)
     verification_kp_mode?: string | null;
     encryption_kp_mode?: string | null;
     signing_kp_mode?: string | null;
+
+    freeze_verification_kp?: boolean | null;
+    freeze_encryption_kp?: boolean | null;
+    freeze_signing_kp?: boolean | null;
 };
 
 type Row = {
     kind: RowKind;
     key: string;
+
+    // DB identity
     uuid?: string;
+
+    // entity identity (always present)
     entity_id?: string;
-    label: string;
     entityIdText: string;
+
+    // label
+    label: string;
+
+    // current state shown in badge
     current: CatalogState | "db";
 
+    // if this DB row was merged with preview, remember preview entity id (used for re-import)
+    previewEntityId?: string;
+
+    // property mappings (SP only for now)
     propertyMappingsOverride?: boolean;
     propertyMappings?: string[];
 
+    // For local settings panels:
+    // - SP: we use boolean override flags (inherit vs force-disable UI is inside the panel)
+    verificationKpOverride?: boolean;
+    encryptionKpOverride?: boolean;
+    signingKpOverride?: boolean;
+
+    // - IdP: still mode strings (inherit/none/...)
     verificationKpMode?: string | null;
     encryptionKpMode?: string | null;
     signingKpMode?: string | null;
+
+    // Optional: freeze flags to decorate UI (not used yet)
+    freezeVerificationKp?: boolean;
+    freezeEncryptionKp?: boolean;
+    freezeSigningKp?: boolean;
 };
 
 type SPLocalSettingsSavedDetail = {
@@ -131,7 +204,7 @@ type IDPLocalSettingsSavedDetail = {
     idpUuid: string;
     applied: {
         verificationKeyEnabled: boolean;
-       encryptionKeyEnabled: boolean;
+        encryptionKeyEnabled: boolean;
         signingKeyEnabled: boolean;
     };
 };
@@ -140,7 +213,16 @@ function apiBasePath(): string {
     return (DEFAULT_CONFIG.basePath ?? "/api/v3").replace(/\/$/, "");
 }
 
-async function catalogPreviewByName(kind: Kind, owner: string, metadataName: string) {
+function normEntityId(v: string): string {
+    return (v ?? "").trim().replace(/\/+$/, "");
+}
+
+async function catalogPreviewByName(
+    kind: Kind,
+    owner: string,
+    metadataName: string,
+    opts?: CatalogOptions,
+): Promise<CatalogPreviewResponse> {
     const url = new URL(`${apiBasePath()}/providers/saml/catalog/preview/`, window.location.origin);
 
     if (kind === "sp") url.searchParams.set("provider", owner);
@@ -148,28 +230,65 @@ async function catalogPreviewByName(kind: Kind, owner: string, metadataName: str
     url.searchParams.set("kind", kind);
 
     const csrf = getCSRFToken();
+    if (!csrf) throw new Error("CSRF cookie missing.");
+
+    const body: Record<string, unknown> = { metadata_name: metadataName };
+
+    if (opts?.verifySignature) {
+        body.verify_signature = true;
+        if (opts.signingCertificate) body.signing_certificate = String(opts.signingCertificate);
+    } else if (opts?.verifySignature === false) {
+        // explicit off (optional)
+        body.verify_signature = false;
+    }
+
     const res = await fetch(url.toString(), {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", "X-authentik-CSRF": csrf! },
-        body: JSON.stringify({ metadata_name: metadataName }),
+        headers: { "Content-Type": "application/json", "X-authentik-CSRF": csrf },
+        body: JSON.stringify(body),
     });
+
     if (!res.ok) throw new Error(`Catalog preview failed (${res.status}): ${await readErrorBody(res)}`);
-    return (await res.json()) as SAMLMetadataCatalogItem[];
+
+    // Backend may return either a raw list (legacy) or {meta, items} (new)
+    const payload = (await res.json()) as unknown;
+
+    if (Array.isArray(payload)) {
+        return { meta: undefined, items: payload as SAMLMetadataCatalogItem[] };
+    }
+    return payload as CatalogPreviewResponse;
 }
 
-async function catalogGetEntityByName(kind: Kind, owner: string, metadataName: string, entityId: string) {
+async function catalogGetEntityByName(
+    kind: Kind,
+    owner: string,
+    metadataName: string,
+    entityId: string,
+    opts?: CatalogOptions,
+): Promise<CatalogEntityResponse> {
     const url = new URL(`${apiBasePath()}/providers/saml/catalog/entity/`, window.location.origin);
 
     if (kind === "sp") url.searchParams.set("provider", owner);
     if (kind === "idp") url.searchParams.set("source", owner); // TODO: implement backend
 
     const csrf = getCSRFToken();
+    if (!csrf) throw new Error("CSRF cookie missing.");
+
+    const body: Record<string, unknown> = { metadata_name: metadataName, entity_id: entityId };
+
+    if (opts?.verifySignature) {
+        body.verify_signature = true;
+        if (opts.signingCertificate) body.signing_certificate = String(opts.signingCertificate);
+    } else if (opts?.verifySignature === false) {
+        body.verify_signature = false;
+    }
+
     const res = await fetch(url.toString(), {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", "X-authentik-CSRF": csrf! },
-        body: JSON.stringify({ metadata_name: metadataName, entity_id: entityId }),
+        headers: { "Content-Type": "application/json", "X-authentik-CSRF": csrf },
+        body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`Catalog entity failed (${res.status}): ${await readErrorBody(res)}`);
     return (await res.json()) as CatalogEntityResponse;
@@ -210,7 +329,6 @@ async function importSingleEntity(
     if (!res.ok) throw new Error(`Import failed (${res.status}): ${await readErrorBody(res)}`);
 }
 
-// SP works now. IdP bulk delete endpoint is TODO.
 async function bulkDelete(kind: Kind, ownerPk: number, uuids: string[]): Promise<void> {
     const basePath = apiBasePath();
 
@@ -242,24 +360,27 @@ function chunk<T>(arr: T[], size: number): T[][] {
 
 @customElement("ak-saml-snapshot-import")
 export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
-    /** "sp" or "idp" */
     @property({ type: String })
     kind: Kind = "sp";
 
-    /**
-     * Owner object:
-     * - SP: provider.pk (number) and provider name for labels
-     * - IdP: source.pk (number) and source name for labels
-     */
     @property({ type: Number })
     ownerPk!: number;
 
     @property({ type: String })
     ownerLabel = "SAML";
 
-    // Selected metadata file from authentik Files (usage=SAML_METADATA)
     @state()
     private metadataName: string | null = null;
+
+    // Signature verification options
+    @state()
+    private verifySignature = true;
+
+    @state()
+    private signingCertificatePk: string | null = null;
+
+    @state()
+    private signatureMeta: SignatureMeta | null = null;
 
     @state()
     private rows: Row[] = [];
@@ -285,21 +406,21 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
     @state()
     private search = "";
 
-    // Progress UI
     @state()
     private progressOpen = false;
+
     @state()
     private progressLabel = "";
+
     @state()
     private progressDone = 0;
+
     @state()
     private progressTotal = 0;
 
-    // preview row key -> staged local settings (SP import only; currently UI-hidden)
     @state()
     private plannedLocalSettingsByKey: Record<string, SAMLSPImportLocalSettings> = {};
 
-    // local settings panel state (DB-only immediate save)
     @state()
     private localSettingsOpen = false;
 
@@ -307,6 +428,34 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
     private localSettingsRowKey: string | null = null;
 
     private selectAllRef = createRef<HTMLInputElement>();
+
+    private get catalogOpts(): CatalogOptions {
+        return {
+            verifySignature: !!this.verifySignature,
+            signingCertificate: this.signingCertificatePk,
+        };
+    }
+
+    private onSigningCertChanged = (ev: Event): void => {
+        const t = ev.target as any;
+        const ce = ev as CustomEvent<any>;
+        const d = (ce as any)?.detail ?? {};
+
+        const pk =
+            d?.value?.pk ??
+            d?.value ??
+            d?.certificate?.pk ??
+            t?.certificate?.pk ??
+            t?.value?.pk ??
+            t?.value ??
+            null;
+
+        this.signingCertificatePk = pk ? String(pk) : null;
+
+        if (this.verifySignature && this.metadataName) {
+            void this.loadPreviewRowsByName(this.metadataName);
+        }
+    };
 
     private isSelected(key: string): boolean {
         return this.selectedKeys.includes(key);
@@ -356,10 +505,7 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
 
     private renderCurrentBadge(row: Row): TemplateResult {
         return html`
-            <span
-                class="pf-c-label pf-m-outline"
-                style="white-space:nowrap; display:inline-flex; align-items:center;"
-            >
+            <span class="pf-c-label pf-m-outline" style="white-space:nowrap; display:inline-flex; align-items:center;">
                 <span class="pf-c-label__content">${row.current}</span>
             </span>
         `;
@@ -369,10 +515,7 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         const p = this.plannedActionFor(key);
         if (p === "none") {
             return html`
-                <span
-                    class="pf-c-label pf-m-outline"
-                    style="white-space:nowrap; display:inline-flex; align-items:center;"
-                >
+                <span class="pf-c-label pf-m-outline" style="white-space:nowrap; display:inline-flex; align-items:center;">
                     <span class="pf-c-label__content">—</span>
                 </span>
             `;
@@ -380,31 +523,52 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         const klass = p === "import" ? "pf-m-green" : "pf-m-red";
         const text = p === "import" ? msg("Import") : msg("Delete");
         return html`
-            <span
-                class="pf-c-label ${klass}"
-                style="white-space:nowrap; display:inline-flex; align-items:center;"
-            >
+            <span class="pf-c-label ${klass}" style="white-space:nowrap; display:inline-flex; align-items:center;">
                 <span class="pf-c-label__content">${text}</span>
             </span>
         `;
     }
 
     private toDbRows(items: ManagedItem[]): Row[] {
-        return items.map((it) => ({
-            kind: "db",
-            key: `db:${it.uuid}`,
-            uuid: it.uuid,
-            label: String(it.name ?? it.entity_id ?? it.uuid),
-            entityIdText: String(it.entity_id ?? ""),
-            current: "db",
+        return items.map((it) => {
+            // Prefer boolean overrides; fall back to legacy mode if present
+            const vOv =
+                it.verification_kp_override ??
+                (it.verification_kp_mode ? String(it.verification_kp_mode).toLowerCase().trim() !== "inherit" : null);
+            const eOv =
+                it.encryption_kp_override ??
+                (it.encryption_kp_mode ? String(it.encryption_kp_mode).toLowerCase().trim() !== "inherit" : null);
+            const sOv =
+                it.signing_kp_override ??
+                (it.signing_kp_mode ? String(it.signing_kp_mode).toLowerCase().trim() !== "inherit" : null);
 
-            propertyMappingsOverride: !!it.property_mappings_override,
-            propertyMappings: Array.isArray(it.property_mappings) ? it.property_mappings.map(String) : [],
+            return {
+                kind: "db",
+                key: `db:${it.uuid}`,
+                uuid: it.uuid,
+                label: String(it.name ?? it.entity_id ?? it.uuid),
+                entity_id: String(it.entity_id ?? ""),
+                entityIdText: String(it.entity_id ?? ""),
+                current: "db",
 
-            verificationKpMode: it.verification_kp_mode ? String(it.verification_kp_mode) : null,
-            encryptionKpMode: it.encryption_kp_mode ? String(it.encryption_kp_mode) : null,
-            signingKpMode: it.signing_kp_mode ? String(it.signing_kp_mode) : null,
-        }));
+                propertyMappingsOverride: !!it.property_mappings_override,
+                propertyMappings: Array.isArray(it.property_mappings) ? it.property_mappings.map(String) : [],
+
+                // SP panel uses override booleans
+                verificationKpOverride: vOv === null ? false : !!vOv,
+                encryptionKpOverride: eOv === null ? false : !!eOv,
+                signingKpOverride: sOv === null ? false : !!sOv,
+
+                // keep mode strings too (IdP panel uses these)
+                verificationKpMode: it.verification_kp_mode ? String(it.verification_kp_mode) : null,
+                encryptionKpMode: it.encryption_kp_mode ? String(it.encryption_kp_mode) : null,
+                signingKpMode: it.signing_kp_mode ? String(it.signing_kp_mode) : null,
+
+                freezeVerificationKp: !!it.freeze_verification_kp,
+                freezeEncryptionKp: !!it.freeze_encryption_kp,
+                freezeSigningKp: !!it.freeze_signing_kp,
+            };
+        });
     }
 
     private toPreviewRows(items: SAMLMetadataCatalogItem[]): Row[] {
@@ -426,6 +590,36 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
             });
     }
 
+    private mergeRows(previewItems: SAMLMetadataCatalogItem[], dbItems: ManagedItem[]): Row[] {
+        const previewByEid = new Map<string, Row>();
+        for (const pv of this.toPreviewRows(previewItems)) {
+            previewByEid.set(normEntityId(pv.entityIdText), pv);
+        }
+
+        const out: Row[] = [];
+
+        // DB rows first; merge preview state into DB rows when entity_id matches
+        for (const db of this.toDbRows(dbItems)) {
+            const eid = normEntityId(db.entityIdText);
+            const pv = previewByEid.get(eid);
+
+            if (pv) {
+                out.push({
+                    ...db,
+                    current: (pv.current ?? "unknown") as any,
+                    previewEntityId: pv.entity_id ?? pv.entityIdText,
+                });
+                previewByEid.delete(eid);
+            } else {
+                out.push(db);
+            }
+        }
+
+        // Remaining preview-only rows (new entries etc.)
+        for (const pv of previewByEid.values()) out.push(pv);
+        return out;
+    }
+
     private pruneSelectionAndPlan(): void {
         const validKeys = new Set(this.rows.map((r) => r.key));
         this.selectedKeys = this.selectedKeys.filter((k) => validKeys.has(k));
@@ -439,11 +633,6 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         this.pruneLocalSettings();
     }
 
-    /**
-     * UX rule:
-     * - Local settings are editable only in DB editing mode (existing DB rows)
-     * - Metadata preview rows never show local settings controls
-     */
     private canEditLocalSettings(row: Row): boolean {
         if (row.kind !== "db") return false;
         return !!row.uuid;
@@ -452,7 +641,6 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
     private getRowLocalSettingsSummary(row: Row): RowLocalSettingsSummary {
         // PM override UI is SP-only. IdP has no PM override panel.
         if (this.kind !== "sp") return { mode: "inherit" };
-
         if (!this.canEditLocalSettings(row)) return { mode: "inherit" };
 
         const effectiveOverride = row.propertyMappingsOverride ?? false;
@@ -465,7 +653,6 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
 
     private renderLocalSettingsBadge(row: Row): TemplateResult {
         if (!this.canEditLocalSettings(row)) return html``;
-        // badge is SP-only for now (PropertyMappings summary)
         if (this.kind !== "sp") return html``;
 
         const summary = this.getRowLocalSettingsSummary(row);
@@ -500,7 +687,6 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         if (this.actionLoading) return;
         if (!this.canEditLocalSettings(row)) return;
 
-        // toggle behavior (click same row closes)
         if (this.localSettingsOpen && this.localSettingsRowKey === row.key) {
             this.closeLocalSettings();
             return;
@@ -511,7 +697,6 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
     }
 
     private pruneLocalSettings(): void {
-        // preview staged settings only (future use)
         const validPreviewKeys = new Set(this.rows.filter((r) => r.kind === "preview").map((r) => r.key));
         const nextPreview: Record<string, SAMLSPImportLocalSettings> = {};
         for (const [k, v] of Object.entries(this.plannedLocalSettingsByKey)) {
@@ -519,7 +704,6 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         }
         this.plannedLocalSettingsByKey = nextPreview;
 
-        // if current panel target row disappeared, close panel
         if (this.localSettingsRowKey) {
             const exists = this.rows.some((r) => r.key === this.localSettingsRowKey);
             if (!exists) this.closeLocalSettings();
@@ -531,7 +715,36 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         return this.rows.find((r) => r.key === key);
     }
 
-    // -------- DB list (managed list) --------
+    private buildDbKeyByEntityId(): Map<string, string> {
+        const m = new Map<string, string>();
+        for (const r of this.rows) {
+            if (r.kind !== "db" || !r.uuid) continue;
+            const eid = normEntityId(String(r.entityIdText ?? ""));
+            if (!eid) continue;
+            m.set(eid, `db:${r.uuid}`);
+        }
+        return m;
+    }
+
+    private countSelectedDeletable(): number {
+        if (!this.selectedKeys.length) return 0;
+
+        const dbByEid = this.buildDbKeyByEntityId();
+        let n = 0;
+
+        for (const k of this.selectedKeys) {
+            if (k.startsWith("db:")) {
+                n += 1;
+                continue;
+            }
+            if (k.startsWith("preview:")) {
+                const eid = normEntityId(k.slice("preview:".length));
+                if (dbByEid.has(eid)) n += 1;
+            }
+        }
+        return n;
+    }
+
     private async listManaged(): Promise<ManagedItem[]> {
         if (this.kind === "sp") {
             const api = new ProvidersApi(DEFAULT_CONFIG);
@@ -551,25 +764,39 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
                         entity_id: String((sp as any).entityId ?? (sp as any).entity_id ?? ""),
                         name: String((sp as any).name ?? ""),
                         property_mappings_override: !!(
-                            (sp as any).propertyMappingsOverride ??
-                            (sp as any).property_mappings_override
+                            (sp as any).propertyMappingsOverride ?? (sp as any).property_mappings_override
                         ),
                         property_mappings: Array.isArray((sp as any).propertyMappings)
                             ? (sp as any).propertyMappings.map(String)
                             : Array.isArray((sp as any).property_mappings)
                               ? (sp as any).property_mappings.map(String)
                               : [],
-                        // SP local settings (tri-state modes)
+
+                        // preferred booleans
+                        verification_kp_override:
+                            (sp as any).verificationKpOverride ?? (sp as any).verification_kp_override ?? null,
+                        encryption_kp_override:
+                            (sp as any).encryptionKpOverride ?? (sp as any).encryption_kp_override ?? null,
+                        signing_kp_override: (sp as any).signingKpOverride ?? (sp as any).signing_kp_override ?? null,
+
+                        // legacy mode strings (if present)
                         verification_kp_mode: (sp as any).verificationKpMode ?? (sp as any).verification_kp_mode ?? null,
                         encryption_kp_mode: (sp as any).encryptionKpMode ?? (sp as any).encryption_kp_mode ?? null,
                         signing_kp_mode: (sp as any).signingKpMode ?? (sp as any).signing_kp_mode ?? null,
-                            });
+
+                        freeze_verification_kp:
+                            (sp as any).freezeVerificationKp ?? (sp as any).freeze_verification_kp ?? null,
+                        freeze_encryption_kp:
+                            (sp as any).freezeEncryptionKp ?? (sp as any).freeze_encryption_kp ?? null,
+                        freeze_signing_kp: (sp as any).freezeSigningKp ?? (sp as any).freeze_signing_kp ?? null,
+                    });
                 }
 
                 const next = (res as any).pagination?.next as number | null | undefined;
                 if (!next) break;
                 page = next;
             }
+
             return all;
         }
 
@@ -591,25 +818,31 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
                         entity_id: String((idp as any).entityId ?? (idp as any).entity_id ?? ""),
                         name: String((idp as any).name ?? ""),
                         property_mappings_override: !!(
-                            (idp as any).propertyMappingsOverride ??
-                            (idp as any).property_mappings_override
+                            (idp as any).propertyMappingsOverride ?? (idp as any).property_mappings_override
                         ),
                         property_mappings: Array.isArray((idp as any).propertyMappings)
                             ? (idp as any).propertyMappings.map(String)
                             : Array.isArray((idp as any).property_mappings)
                               ? (idp as any).property_mappings.map(String)
                               : [],
-                        // IdP local settings (tri-state modes)
+
                         verification_kp_mode: (idp as any).verificationKpMode ?? (idp as any).verification_kp_mode ?? null,
                         encryption_kp_mode: (idp as any).encryptionKpMode ?? (idp as any).encryption_kp_mode ?? null,
                         signing_kp_mode: (idp as any).signingKpMode ?? (idp as any).signing_kp_mode ?? null,
-                            });
+
+                        freeze_verification_kp:
+                            (idp as any).freezeVerificationKp ?? (idp as any).freeze_verification_kp ?? null,
+                        freeze_encryption_kp:
+                            (idp as any).freezeEncryptionKp ?? (idp as any).freeze_encryption_kp ?? null,
+                        freeze_signing_kp: (idp as any).freezeSigningKp ?? (idp as any).freeze_signing_kp ?? null,
+                    });
                 }
 
                 const next = (res as any).pagination?.next as number | null | undefined;
                 if (!next) break;
                 page = next;
             }
+
             return all;
         }
 
@@ -620,10 +853,28 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         if (!this.ownerPk) return;
         this.dbLoading = true;
         try {
-            const all = await this.listManaged();
-            const dbRows = this.toDbRows(all);
-            const previewRows = this.rows.filter((r) => r.kind === "preview");
-            this.rows = [...previewRows, ...dbRows];
+            const dbItems = await this.listManaged();
+
+            // If we already have a preview open, re-fetch preview to keep merged state consistent.
+            // Otherwise just show DB list.
+            if (this.metadataName) {
+                // keep signature meta as-is if preview fails
+                try {
+                    const resp = await catalogPreviewByName(
+                        this.kind,
+                        String(this.ownerPk),
+                        this.metadataName,
+                        this.catalogOpts,
+                    );
+                    this.signatureMeta = resp?.meta?.signature ?? this.signatureMeta;
+                    this.rows = this.mergeRows(resp.items ?? [], dbItems);
+                } catch {
+                    this.rows = this.toDbRows(dbItems);
+                }
+            } else {
+                this.rows = this.toDbRows(dbItems);
+            }
+
             this.pruneSelectionAndPlan();
         } finally {
             this.dbLoading = false;
@@ -637,18 +888,30 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         this.previewError = null;
 
         try {
-            const items = await catalogPreviewByName(this.kind, String(this.ownerPk), metadataName);
-            const previewRows = this.toPreviewRows(items);
+            const resp = await catalogPreviewByName(
+                this.kind,
+                String(this.ownerPk),
+                metadataName,
+                this.catalogOpts,
+            );
+            this.signatureMeta = resp?.meta?.signature ?? null;
 
+            const previewItems = resp.items ?? [];
+            const dbItems = await this.listManaged();
+
+            this.rows = this.mergeRows(previewItems, dbItems);
+
+            // Auto-stage import:
+            // - preview-only rows: unchanged/updated => import (new is user choice)
+            // - merged DB rows: unchanged/updated => import (A policy)
             const nextPlanned: Record<string, PlannedAction> = { ...this.plannedByKey };
-            for (const r of previewRows) {
+            for (const r of this.rows) {
+                const hasPreview = r.kind === "preview" || !!r.previewEntityId;
+                if (!hasPreview) continue;
                 if (r.current !== "new") nextPlanned[r.key] = "import";
             }
-
-            const dbRows = this.rows.filter((r) => r.kind === "db");
-            this.rows = [...previewRows, ...dbRows];
-
             this.plannedByKey = nextPlanned;
+
             this.pruneSelectionAndPlan();
         } catch (e) {
             this.previewError = e instanceof Error ? e.message : String(e);
@@ -666,40 +929,6 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         await this.loadPreviewRowsByName(this.metadataName);
     };
 
-    private normEntityId(v: string): string {
-        return (v ?? "").trim().replace(/\/+$/, "");
-    }
-
-    private buildDbKeyByEntityId(): Map<string, string> {
-        const m = new Map<string, string>();
-        for (const r of this.rows) {
-            if (r.kind !== "db" || !r.uuid) continue;
-            const eid = this.normEntityId(String(r.entityIdText ?? ""));
-            if (!eid) continue;
-            m.set(eid, `db:${r.uuid}`);
-        }
-        return m;
-    }
-
-    private countSelectedDeletable(): number {
-        if (!this.selectedKeys.length) return 0;
-
-        const dbByEid = this.buildDbKeyByEntityId();
-        let n = 0;
-
-        for (const k of this.selectedKeys) {
-            if (k.startsWith("db:")) {
-                n += 1;
-                continue;
-            }
-            if (k.startsWith("preview:")) {
-                const eid = this.normEntityId(k.slice("preview:".length));
-                if (dbByEid.has(eid)) n += 1;
-            }
-        }
-        return n;
-    }
-
     private stageSelected(action: PlannedAction): void {
         if (!this.selectedKeys.length) {
             showMessage({ level: MessageLevel.warning, message: msg("No rows selected.") });
@@ -714,8 +943,8 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
             const isDb = key.startsWith("db:");
 
             if (action === "import") {
-                if (!isPreview) continue;
-                nextPlanned[key] = "import";
+                // A policy: allow BOTH preview and DB
+                if (isPreview || isDb) nextPlanned[key] = "import";
                 continue;
             }
 
@@ -725,7 +954,7 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
                     continue;
                 }
                 if (isPreview) {
-                    const eid = this.normEntityId(key.slice("preview:".length));
+                    const eid = normEntityId(key.slice("preview:".length));
                     const dbKey = dbByEid.get(eid);
                     if (dbKey) nextPlanned[dbKey] = "delete";
                 }
@@ -736,7 +965,7 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
                 if (isDb) delete nextPlanned[key];
                 if (isPreview) {
                     delete nextPlanned[key];
-                    const eid = this.normEntityId(key.slice("preview:".length));
+                    const eid = normEntityId(key.slice("preview:".length));
                     const dbKey = dbByEid.get(eid);
                     if (dbKey) delete nextPlanned[dbKey];
                 }
@@ -770,17 +999,36 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         this.progressTotal = 0;
     }
 
+    private resolveEntityIdForKey(key: string): string | null {
+        if (key.startsWith("preview:")) return key.slice("preview:".length);
+
+        if (key.startsWith("db:")) {
+            const uuid = key.slice("db:".length);
+            const row = this.rows.find((r) => r.kind === "db" && r.uuid === uuid);
+            const eid = row?.previewEntityId ?? row?.entity_id ?? row?.entityIdText;
+            const out = normEntityId(String(eid ?? ""));
+            return out ? out : null;
+        }
+
+        return null;
+    }
+
     private async applyChanges(): Promise<void> {
         const plannedImportKeys = Object.entries(this.plannedByKey)
-            .filter(([k, v]) => v === "import" && k.startsWith("preview:"))
+            .filter(([, v]) => v === "import")
             .map(([k]) => k);
 
         const plannedDeleteKeys = Object.entries(this.plannedByKey)
             .filter(([k, v]) => v === "delete" && k.startsWith("db:"))
             .map(([k]) => k);
 
-        const entityIds = plannedImportKeys.map((k) => k.slice("preview:".length));
         const uuids = plannedDeleteKeys.map((k) => k.slice("db:".length));
+
+        const entityIds: Array<{ key: string; entityId: string }> = [];
+        for (const k of plannedImportKeys) {
+            const eid = this.resolveEntityIdForKey(k);
+            if (eid) entityIds.push({ key: k, entityId: eid });
+        }
 
         if (!entityIds.length && !uuids.length) {
             showMessage({ level: MessageLevel.info, message: msg("No staged changes to apply.") });
@@ -800,28 +1048,46 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         this.openProgress(msg("Applying changes…"), totalSteps);
 
         try {
-            // 1) Imports from preview (metadata)
-            if (entityIds.length) {
-                for (const entityId of entityIds) {
-                    const ent = await catalogGetEntityByName(
-                        this.kind,
-                        String(this.ownerPk),
-                        this.metadataName!,
-                        entityId,
-                    );
-                    const rowKey = `preview:${entityId}`;
-                    const localSettings =
-                        this.kind === "sp" ? this.plannedLocalSettingsByKey[rowKey] : undefined;
 
-                    await importSingleEntity(this.kind, this.ownerPk, ent.xml, localSettings);
+// 1) Imports from preview (metadata)
+if (entityIds.length) {
+    for (const { key, entityId } of entityIds) {
+    try {
+      const ent = await catalogGetEntityByName(
+        this.kind,
+        String(this.ownerPk),
+        this.metadataName!,
+        entityId,
+        this.catalogOpts,
+      );
 
-                    this.bumpProgress(1);
+      const rowKey = `preview:${entityId}`;
+      const localSettings =
+        this.kind === "sp" ? this.plannedLocalSettingsByKey[rowKey] : undefined;
 
-                    const nextPlanned = { ...this.plannedByKey };
-                    delete nextPlanned[rowKey];
-                    this.plannedByKey = nextPlanned;
-                }
-            }
+      await importSingleEntity(this.kind, this.ownerPk, ent.xml, localSettings);
+
+      // 成功したら計画から外す
+      const nextPlanned = { ...this.plannedByKey };
+      delete nextPlanned[rowKey];
+      this.plannedByKey = nextPlanned;
+
+    } catch (e) {
+      // ここがポイント：落とさず継続
+      console.warn("Import skipped:", entityId, e);
+      showMessage({
+        level: MessageLevel.warning,
+        message: msg(`Skipped import (not in selected metadata): ${entityId}`),
+      });
+
+      // “失敗したら staged を残す” のが自然（原因直したら再実行できる）
+      // もし「自動で外したい」なら delete plannedByKey[rowKey] をここでやる
+      continue;
+    } finally {
+      this.bumpProgress(1);
+    }
+  }
+}
 
             // 2) Bulk delete DB rows
             if (uuids.length) {
@@ -883,8 +1149,37 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         `;
     }
 
-    private get activeLocalSettingsRow(): Row | undefined {
-        return this.rowByKey(this.localSettingsRowKey);
+    private renderSignatureBanner(): TemplateResult {
+        const sig = this.signatureMeta;
+        if (!sig) return nothing;
+
+        const status = String(sig.status ?? "").toLowerCase().trim();
+        const isOk = status === "ok";
+        const isWarn = status === "stale" || status === "unsigned" || status === "skipped";
+        const variant = isOk ? "pf-m-success" : isWarn ? "pf-m-warning" : "pf-m-danger";
+
+        const title = msg("Signature");
+        const body = sig.message ?? status;
+
+        const extra = [
+            sig.metadata_name ? `Name=${sig.metadata_name}` : null,
+            sig.metadata_id ? `ID=${sig.metadata_id}` : null,
+            sig.valid_until ? `validUntil=${sig.valid_until}` : null,
+        ]
+            .filter(Boolean)
+            .join(" · ");
+
+        return html`
+            <div class="pf-c-alert ${variant}" style="margin: 0;">
+                <div class="pf-c-alert__title">${title}: ${status || "—"}</div>
+                <div class="pf-c-alert__description">
+                    <div>${body}</div>
+                    ${extra
+                        ? html`<div style="margin-top:4px; opacity:0.85; font-size: 12px;">${extra}</div>`
+                        : nothing}
+                </div>
+            </div>
+        `;
     }
 
     private onSPLocalSettingsSaved = (ev: CustomEvent<SPLocalSettingsSavedDetail>): void => {
@@ -892,19 +1187,24 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
 
         const { spUuid, applied } = ev.detail;
 
-        const toMode = (enabled: boolean) => (enabled ? "inherit" : "none");
+        // Modal uses "enabled" semantics (inherit vs force-disable)
+        // It PATCHes *_kp_override booleans; we reflect that as:
+        // enabled=true  => override=false (inherit)
+        // enabled=false => override=true  (local override with null to disable)
+        const toOverride = (enabled: boolean) => !enabled;
 
-        // DB is already updated by panel PATCH, reflect immediately in UI row
-        this.rows = this.rows.map((r) => (r.kind === "db" && r.uuid === spUuid
-            ? {
-                  ...r,
-                  propertyMappingsOverride: applied.propertyMappingsOverride,
-                  propertyMappings: [...applied.propertyMappings],
-                  verificationKpMode: toMode(applied.verificationKeyEnabled),
-                  encryptionKpMode: toMode(applied.encryptionKeyEnabled),
-                  signingKpMode: toMode(applied.signingKeyEnabled),
-              }
-            : r));
+        this.rows = this.rows.map((r) =>
+            r.kind === "db" && r.uuid === spUuid
+                ? {
+                      ...r,
+                      propertyMappingsOverride: applied.propertyMappingsOverride,
+                      propertyMappings: [...applied.propertyMappings],
+                      verificationKpOverride: toOverride(applied.verificationKeyEnabled),
+                      encryptionKpOverride: toOverride(applied.encryptionKeyEnabled),
+                      signingKpOverride: toOverride(applied.signingKeyEnabled),
+                  }
+                : r,
+        );
 
         this.closeLocalSettings();
     };
@@ -914,10 +1214,6 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
 
         const { idpUuid, applied } = ev.detail;
 
-        // DB is already updated by panel PATCH, reflect immediately in UI row (modes)
-        // UI semantics in IdP editor:
-        // - enabled=true  => mode="inherit"
-        // - enabled=false => mode="none"
         const toMode = (enabled: boolean) => (enabled ? "inherit" : "none");
 
         this.rows = this.rows.map((r) =>
@@ -960,13 +1256,14 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
         const stagedImport = this.plannedCount("import");
         const stagedDelete = this.plannedCount("delete");
 
-        const canStageImport = !this.actionLoading && selectedPreview > 0;
+        // A policy: allow Stage import for DB too
+        const canStageImport = !this.actionLoading && selectedPreview + selectedDb > 0;
         const canStageDelete = !this.actionLoading && deletableSelected > 0;
 
         return html`
             <form class="pf-c-form pf-m-horizontal">
                 <div style="display:flex; flex-direction:column; gap: 8px; margin-bottom: 10px;">
-                    <div style="display:flex; gap: 8px; align-items:flex-end; flex-wrap: wrap;">
+                    <div style="display:flex; gap: 12px; align-items:center; flex-wrap: wrap;">
                         <div style="flex: 1 1 420px; min-width: 280px;">
                             <ak-file-search-input
                                 name="metadataName"
@@ -982,46 +1279,93 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
                             ></ak-file-search-input>
                         </div>
 
-                        <button
-                            type="button"
-                            class="pf-c-button pf-m-secondary"
-                            ?disabled=${this.actionLoading || this.previewLoading || !this.metadataName}
-                            @click=${this.previewFromSelectedMetadata}
-                        >
-                            ${msg("Preview")}
-                        </button>
+                        <div style="flex: 0 0 auto; display:flex; align-items:center; gap: 12px; flex-wrap: wrap;">
+                            <ak-switch-input
+                                name="verifySignature"
+                                label=${msg("Verify signature")}
+                                ?checked=${this.verifySignature}
+                                ?disabled=${this.actionLoading || this.previewLoading}
+                                @change=${(ev: Event) => {
+                                    this.verifySignature = !!(ev.target as HTMLInputElement | null)?.checked;
+                                    if (this.metadataName) void this.loadPreviewRowsByName(this.metadataName);
+                                }}
+                                @ak-change=${(ev: CustomEvent) => {
+                                    const d: any = ev.detail;
+                                    if (typeof d?.value === "boolean") this.verifySignature = d.value;
+                                    else this.verifySignature = !!(ev.target as HTMLInputElement | null)?.checked;
+                                    if (this.metadataName) void this.loadPreviewRowsByName(this.metadataName);
+                                }}
+                            ></ak-switch-input>
 
-                        <button
-                            type="button"
-                            class="pf-c-button pf-m-primary"
-                            ?disabled=${!canStageImport}
-                            @click=${() => this.stageSelected("import")}
-                        >
-                            ${msg("Stage import")}
-                        </button>
+                            <!-- IMPORTANT: ak-crypto-certificate-search must be inside a named ak-form-element-horizontal -->
+     <ak-form-element-horizontal
+       name="signingCertificate"
+       label=${msg("Signing certificate (optional)")}
+       style="margin:0; min-width: 320px;"
+     >
+                                <ak-crypto-certificate-search
+                                    nokey
+                                    singleton
+                                    ?disabled=${this.actionLoading || this.previewLoading || !this.verifySignature}
+                                    @input=${this.onSigningCertChanged}
+                                    @ak-change=${this.onSigningCertChanged}
+                                    @change=${this.onSigningCertChanged}
+                                ></ak-crypto-certificate-search>
+                            </ak-form-element-horizontal>
+                        </div>
 
-                        <button
-                            type="button"
-                            class="pf-c-button pf-m-danger"
-                            ?disabled=${!canStageDelete}
-                            @click=${() => this.stageSelected("delete")}
-                        >
-                            ${msg("Stage delete")}
-                        </button>
+  <div
+    style="
+      flex: 0 0 auto;
+      display:flex;
+      align-items:center;
+      gap: 8px;
+      white-space: nowrap;
+    "
+  >
+    <button
+      type="button"
+      class="pf-c-button pf-m-secondary"
+      ?disabled=${this.actionLoading || this.previewLoading || !this.metadataName}
+      @click=${this.previewFromSelectedMetadata}
+    >
+      ${msg("Preview")}
+    </button>
 
-                        <button
-                            type="button"
-                            class="pf-c-button pf-m-secondary"
-                            ?disabled=${this.actionLoading || stagedImport + stagedDelete === 0}
-                            @click=${this.resetPlan}
-                        >
-                            ${msg("Clear staged")}
-                        </button>
+    <button
+      type="button"
+      class="pf-c-button pf-m-primary"
+      ?disabled=${!canStageImport}
+      @click=${() => this.stageSelected("import")}
+    >
+      ${msg("Stage import")}
+    </button>
+
+    <button
+      type="button"
+      class="pf-c-button pf-m-danger"
+      ?disabled=${!canStageDelete}
+      @click=${() => this.stageSelected("delete")}
+    >
+      ${msg("Stage delete")}
+    </button>
+
+    <button
+      type="button"
+      class="pf-c-button pf-m-secondary"
+      ?disabled=${this.actionLoading || stagedImport + stagedDelete === 0}
+      @click=${this.resetPlan}
+    >
+      ${msg("Clear staged")}
+    </button>
+  </div>
 
                         <div style="margin-left:auto; font-size: 12px; opacity: 0.8; white-space: nowrap;">
                             ${msg("Target")}: ${this.ownerLabel} · ${msg("Kind")}: ${this.kind.toUpperCase()}
                         </div>
                     </div>
+
+                    ${this.renderSignatureBanner()}
 
                     <div style="display:flex; gap: 10px; align-items:flex-end; flex-wrap: wrap;">
                         <div class="pf-c-form__group" style="margin:0; flex: 1 1 420px; min-width: 280px;">
@@ -1107,21 +1451,27 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
                                                       align-items:center;
                                                       gap: 10px;
                                                       padding: 6px 8px;
+                                                      min-height: 46px;
                                                       border: 1px solid var(--pf-global--BorderColor--200);
                                                       border-radius: 6px;
                                                       background: var(--pf-global--BackgroundColor--100);
                                                   "
                                               >
-                                                  <input
-                                                      class="pf-c-check__input"
-                                                      type="checkbox"
-                                                      style="flex: 0 0 auto; margin: 0;"
-                                                      .checked=${checked}
-                                                      @change=${(ev: Event) => {
-                                                          const isChecked = (ev.target as HTMLInputElement).checked;
-                                                          this.toggleKey(row.key, isChecked);
-                                                      }}
-                                                  />
+                                                  <label
+                                                      class="pf-c-check pf-m-standalone"
+                                                      style="margin:0; flex:0 0 auto; line-height:0; align-self:center;"
+                                                  >
+                                                      <input
+                                                          class="pf-c-check__input"
+                                                          type="checkbox"
+                                                          style="margin:0;"
+                                                          .checked=${checked}
+                                                          @change=${(ev: Event) => {
+                                                              const isChecked = (ev.target as HTMLInputElement).checked;
+                                                              this.toggleKey(row.key, isChecked);
+                                                          }}
+                                                      />
+                                                  </label>
 
                                                   <span style="flex: 0 0 auto; display:inline-flex; align-items:center;">
                                                       ${this.renderCurrentBadge(row)}
@@ -1191,34 +1541,34 @@ export class SAMLSnapshotImportForm extends Form<Record<string, unknown>> {
 
                                               ${isPanelOpen
                                                   ? this.kind === "sp"
-                                                    ? html`
-                                                        <div
-                                                            style="
-                                                                margin-top: 6px;
-                                                                border: 1px solid var(--pf-global--BorderColor--100);
-                                                                border-radius: 6px;
-                                                                background: var(--pf-global--BackgroundColor--100);
-                                                                padding: 10px 12px;
-                                                            "
-                                                        >
-                                                            <ak-saml-sp-db-local-settings-modal
-                                                                .open=${true}
-                                                                .providerPk=${this.ownerPk}
-                                                                .spUuid=${row.uuid ?? ""}
-                                                                .rowLabel=${row.label ?? ""}
-                                                                .rowEntityId=${row.entityIdText ?? ""}
-                                                                .propertyMappingsOverride=${row.propertyMappingsOverride ?? false}
-                                                                .propertyMappings=${row.propertyMappings ?? []}
-                                                                .verificationKpMode=${row.verificationKpMode ?? null}
-                                                                .encryptionKpMode=${row.encryptionKpMode ?? null}
-                                                                .signingKpMode=${row.signingKpMode ?? null}
-                                                                .disabled=${this.actionLoading}
-                                                                @ak-saml-sp-local-settings-saved=${this.onSPLocalSettingsSaved}
-                                                                @ak-saml-sp-local-settings-cancelled=${this.onLocalSettingsCancelled}
-                                                                @ak-saml-sp-local-settings-closed=${this.onLocalSettingsCancelled}
-                                                            ></ak-saml-sp-db-local-settings-modal>
-                                                        </div>
-                                                    `
+                                                      ? html`
+                                                            <div
+                                                                style="
+                                                                    margin-top: 6px;
+                                                                    border: 1px solid var(--pf-global--BorderColor--100);
+                                                                    border-radius: 6px;
+                                                                    background: var(--pf-global--BackgroundColor--100);
+                                                                    padding: 10px 12px;
+                                                                "
+                                                            >
+                                                                <ak-saml-sp-db-local-settings-modal
+                                                                    .open=${true}
+                                                                    .providerPk=${this.ownerPk}
+                                                                    .spUuid=${row.uuid ?? ""}
+                                                                    .rowLabel=${row.label ?? ""}
+                                                                    .rowEntityId=${row.entityIdText ?? ""}
+                                                                    .propertyMappingsOverride=${row.propertyMappingsOverride ?? false}
+                                                                    .propertyMappings=${row.propertyMappings ?? []}
+                                                                    .verificationKpOverride=${row.verificationKpOverride ?? false}
+                                                                    .encryptionKpOverride=${row.encryptionKpOverride ?? false}
+                                                                    .signingKpOverride=${row.signingKpOverride ?? false}
+                                                                    .disabled=${this.actionLoading}
+                                                                    @ak-saml-sp-local-settings-saved=${this.onSPLocalSettingsSaved}
+                                                                    @ak-saml-sp-local-settings-cancelled=${this.onLocalSettingsCancelled}
+                                                                    @ak-saml-sp-local-settings-closed=${this.onLocalSettingsCancelled}
+                                                                ></ak-saml-sp-db-local-settings-modal>
+                                                            </div>
+                                                        `
                                                       : html`
                                                             <div
                                                                 style="

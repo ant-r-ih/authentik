@@ -19,7 +19,7 @@ from authentik.crypto.models import CertificateKeyPair
 from authentik.events.models import Event, EventAction
 from authentik.lib.generators import generate_id
 from authentik.lib.xml import lxml_from_string
-from authentik.providers.saml.models import SAMLPropertyMapping, SAMLProvider, SAMLSPKeyOverrideMode
+from authentik.providers.saml.models import SAMLPropertyMapping, SAMLProvider
 from authentik.providers.saml.processors.assertion import AssertionProcessor
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequestParser
 from authentik.providers.saml.utils.certrefs import (
@@ -70,7 +70,7 @@ class TestAuthNResolve(TestCase):
             enabled=True,
             acs_url=self.acs,
             verification_kp=self.cert_sp,
-            verification_kp_mode=SAMLSPKeyOverrideMode.SET,
+            verification_kp_override = True,
         )
         sync_saml_sp_cert_refs(sp)
         sync_saml_provider_cert_refs(self.provider)
@@ -401,7 +401,7 @@ class TestAuthNResolve(TestCase):
         # prepare SP-local signing override
         sp = self.provider.service_providers.get(entity_id=self.issuer)
         sp.signing_kp = self.cert_overridden_sp
-        sp.signing_kp_mode = SAMLSPKeyOverrideMode.SET
+        sp.signing_kp_override = True
         sp.save()
 
         http_request = self.request_factory.get("/")
@@ -429,7 +429,7 @@ class TestAuthNResolve(TestCase):
         """SP signing_kp_mode=NONE should suppress provider signing key."""
         sp = self.provider.service_providers.get(entity_id=self.issuer)
         sp.signing_kp = None
-        sp.signing_kp_mode = SAMLSPKeyOverrideMode.NONE
+        sp.signing_kp_override = True
         sp.save()
 
         http_request = self.request_factory.get("/")

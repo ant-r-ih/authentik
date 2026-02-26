@@ -28,12 +28,13 @@ from authentik.core.api.utils import (
     PropertyMappingPreviewSerializer,
 )
 from authentik.crypto.models import CertificateReference
+from authentik.providers.saml.federation import (
+    build_runtime_from_snapshot,
+)
 from authentik.providers.saml.models import (
     SAMLSP,
     SAMLBindings,
     SAMLProvider,
-    SAMLSPKeyOverrideMode,
-    build_runtime_from_snapshot,
 )
 from authentik.providers.saml.processors.feed_extract import parse_entity_descriptor_xml
 from authentik.providers.saml.processors.import_sp import import_sp_from_entity_descriptor
@@ -53,31 +54,6 @@ NS_MAP = {
 }
 
 LOGGER = get_logger()
-
-def _normalize_kp_modes_from_validated_data(instance: SAMLSP, validated_data: dict) -> None:
-    """Normalize *_kp_mode from explicit serializer inputs.
-
-    Rule:
-    - key omitted     -> leave mode unchanged
-    - key provided null -> INHERIT
-    - key provided FK   -> SET
-    """
-    mapping = (
-        ("verification_kp", "verification_kp_mode"),
-        ("signing_kp", "signing_kp_mode"),
-        ("encryption_kp", "encryption_kp_mode"),
-    )
-
-    for kp_field, mode_field in mapping:
-        if kp_field not in validated_data:
-            continue
-        setattr(
-            instance,
-            mode_field,
-            SAMLSPKeyOverrideMode.INHERIT
-            if validated_data[kp_field] is None
-            else SAMLSPKeyOverrideMode.SET,
-        )
 class SAMLSPSerializer(ModelSerializer):
 
     has_verification_kp = serializers.SerializerMethodField()
@@ -95,28 +71,41 @@ class SAMLSPSerializer(ModelSerializer):
         return obj.verification_kp_id is not None
 
     def create(self, validated_data):
-        property_mappings = validated_data.pop("property_mappings", None)  # M2M safety
+        property_mappings = validated_data.pop("property_mappings", None)
+
+        _normalize_kp_overrides(None, validated_data)
         instance: SAMLSP = super().create(validated_data)
 
         if property_mappings is not None:
             instance.property_mappings.set(property_mappings)
 
-        _normalize_kp_modes_from_validated_data(instance, validated_data)
-        instance.save(
-            update_fields=["encryption_kp_mode", "signing_kp_mode", "verification_kp_mode"])
+        if validated_data.get("property_mappings_override") is False:
+            instance.property_mappings.clear()
+
+        update_fields = _apply_kp_overrides(instance, validated_data)
+        if update_fields:
+            instance.save(update_fields=update_fields)
+
         sync_saml_sp_cert_refs(instance)
         return instance
 
+
     def update(self, instance, validated_data):
-        property_mappings = validated_data.pop("property_mappings", None)  # M2M safety
+        property_mappings = validated_data.pop("property_mappings", None)
+
+        _normalize_kp_overrides(instance, validated_data)
         instance: SAMLSP = super().update(instance, validated_data)
 
         if property_mappings is not None:
-            instance.property_mappings.set(property_mappings)  # [] なら clear
+            instance.property_mappings.set(property_mappings)
 
-        _normalize_kp_modes_from_validated_data(instance, validated_data)
-        instance.save(
-            update_fields=["encryption_kp_mode", "signing_kp_mode", "verification_kp_mode"])
+        if validated_data.get("property_mappings_override") is False:
+            instance.property_mappings.clear()
+
+        update_fields = _apply_kp_overrides(instance, validated_data)
+        if update_fields:
+            instance.save(update_fields=update_fields)
+
         sync_saml_sp_cert_refs(instance)
         return instance
     class Meta:
@@ -136,11 +125,15 @@ class SAMLSPSerializer(ModelSerializer):
             "want_assertions_signed",
             "name_id_policy",
             "encryption_kp",
-            "encryption_kp_mode",
+            "encryption_kp_override",
+            "freeze_encryption_kp",
             "signing_kp",
-            "signing_kp_mode",
+            "signing_kp_override",
+            "freeze_signing_kp",
             "verification_kp",
-            "verification_kp_mode",
+            "verification_kp_override",
+            "freeze_verification_kp",
+            "has_local_override",
             "created",
             "last_updated",
             "has_encryption_kp",
@@ -157,7 +150,11 @@ class SAMLSPSerializer(ModelSerializer):
             "last_updated",
             "metadata_snapshot",
             "metadata_hash",
-            "runtime_db_basis_state"
+            "runtime_db_basis_state",
+            "has_local_override",
+            "has_encryption_kp",
+            "has_signing_kp",
+            "has_verification_kp",
         ]
         extra_kwargs = {
             "sp_binding": {"required": False},
@@ -209,18 +206,12 @@ class SAMLSPViewSet(UsedByMixin, ModelViewSet):
         skipped = []
         if sp.freeze_verification_kp:
             skipped.append("verification_kp (frozen)")
-        elif sp.verification_kp_mode != SAMLSPKeyOverrideMode.INHERIT:
-            skipped.append(f"verification_kp (mode={sp.verification_kp_mode})")
 
         if sp.freeze_signing_kp:
             skipped.append("signing_kp (frozen)")
-        elif sp.signing_kp_mode != SAMLSPKeyOverrideMode.INHERIT:
-            skipped.append(f"signing_kp (mode={sp.signing_kp_mode})")
 
         if sp.freeze_encryption_kp:
             skipped.append("encryption_kp (frozen)")
-        elif sp.encryption_kp_mode != SAMLSPKeyOverrideMode.INHERIT:
-            skipped.append(f"encryption_kp (mode={sp.encryption_kp_mode})")
 
         apply_snapshot_to_runtime(sp)
 
@@ -439,13 +430,45 @@ def apply_snapshot_to_runtime(sp: SAMLSP) -> list[str]:
 
 def _can_apply_kp_from_metadata(sp: SAMLSP, key_name: str) -> tuple[bool, str | None]:
     freeze_attr = f"freeze_{key_name}_kp"
-    mode_attr = f"{key_name}_kp_mode"
-
     if getattr(sp, freeze_attr, False):
         return False, f"{key_name}_kp (frozen)"
-
-    mode = getattr(sp, mode_attr, SAMLSPKeyOverrideMode.INHERIT)
-    if mode != SAMLSPKeyOverrideMode.INHERIT:
-        return False, f"{key_name}_kp (mode={mode})"
-
     return True, None
+
+def _normalize_kp_overrides(instance: SAMLSP, validated_data: dict) -> None:
+    """
+    Keep *_kp_override and *_kp consistent.
+
+    Rules (simple & deterministic):
+      - If override flag is present in request:
+          override == False => force *_kp = None  (inherit)
+          override == True  => keep provided *_kp as-is (may be None => disable)
+      - If *_kp is present but override flag is NOT present:
+          (optional policy) do nothing OR auto-set override=True.
+          Recommend: auto-set override=True to match user intent.
+    """
+    # auto-enable override if user explicitly sent a kp field (even None)
+    for slot in ("verification", "signing", "encryption"):
+        kp_field = f"{slot}_kp"
+        ov_field = f"{slot}_kp_override"
+        if kp_field in validated_data and ov_field not in validated_data:
+            validated_data[ov_field] = True
+
+def _apply_kp_overrides(instance: SAMLSP, validated_data: dict) -> list[str]:
+    update_fields: list[str] = []
+
+    for slot in ("verification", "signing", "encryption"):
+        kp_field = f"{slot}_kp"
+        ov_field = f"{slot}_kp_override"
+
+        if ov_field in validated_data:
+            ov = bool(validated_data[ov_field])
+            setattr(instance, ov_field, ov)
+            update_fields.append(ov_field)
+
+            if not ov:
+                # inherit => clear local kp to avoid confusion
+                if getattr(instance, kp_field + "_id", None) is not None:
+                    setattr(instance, kp_field, None)
+                    update_fields.append(kp_field)
+
+    return update_fields

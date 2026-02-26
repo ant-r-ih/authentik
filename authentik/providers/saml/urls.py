@@ -48,24 +48,10 @@ urlpatterns = [
         name="metadata-download",
     ),
 ]
-'''
-api_urlpatterns = [
-    ("propertymappings/provider/saml", SAMLPropertyMappingViewSet),
-    ("providers/samlsp", SAMLSPViewSet, "samlsp"),
-    ("providers/samlsp-mport", SAMLSPImportViewSet, "samlsp-import"),
-    ("providers/saml/catalog", SAMLMetadataCatalogViewSet, "saml-catalog"),
-    ("providers/saml", SAMLProviderViewSet),
-]
-'''
 
-
-'''
-'''
 api_urlpatterns = [
     ("propertymappings/provider/saml", SAMLPropertyMappingViewSet),
     ("providers/samlsp", SAMLSPViewSet, "samlsp"),
     ("providers/saml/catalog", SAMLMetadataCatalogViewSet, "saml-catalog"),
     ("providers/saml", SAMLProviderViewSet),
 ]
-'''
-'''

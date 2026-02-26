@@ -10,11 +10,10 @@
 //   - ak-saml-idp-local-settings-cancelled
 //   - ak-saml-idp-local-settings-closed
 //
-// Key UI policy (important):
+// Key UI policy (updated: binary override):
 // - No keypair selector in UI
-// - ON  => inherit source default behavior (kp_mode="inherit")
-// - OFF => force disable for this IdP (kp_mode="none")
-// - We do NOT modify *_kp FK here (kept as-is for future "SET" UI).
+// - ON  => inherit source default behavior (override=false)
+// - OFF => force disable for this IdP (override=true, kp=null)
 //
 // Notes:
 // - This is NOT an overlay modal; it is rendered inline under a row.
@@ -32,11 +31,11 @@ import { showMessage } from "#elements/messages/MessageContainer";
 import { MessageLevel } from "#common/messages";
 import { DEFAULT_CONFIG } from "#common/api/config";
 
-type KPMode = "inherit" | "set" | "none" | string;
-
 type SavedDetail = {
     idpUuid: string;
     applied: {
+        // true = inherit source behavior
+        // false = force-disable for this IdP
         verificationKeyEnabled: boolean;
         encryptionKeyEnabled: boolean;
         signingKeyEnabled: boolean;
@@ -45,9 +44,15 @@ type SavedDetail = {
 
 type PatchLocalSettingsBody = {
     source: number;
-    verification_kp_mode?: KPMode;
-    encryption_kp_mode?: KPMode;
-    signing_kp_mode?: KPMode;
+
+    verification_kp_override?: boolean;
+    encryption_kp_override?: boolean;
+    signing_kp_override?: boolean;
+
+    // OFF => disable must explicitly clear local kp
+    verification_kp?: string | null;
+    encryption_kp?: string | null;
+    signing_kp?: string | null;
 };
 
 async function readErrorBody(res: Response): Promise<string> {
@@ -73,15 +78,6 @@ function apiBasePath(): string {
     return (DEFAULT_CONFIG.basePath ?? "/api/v3").replace(/\/$/, "");
 }
 
-function enabledToMode(enabled: boolean): KPMode {
-    return enabled ? "inherit" : "none";
-}
-
-function modeToEnabled(mode: KPMode | null | undefined): boolean {
-    if (!mode) return true;
-    return String(mode).toLowerCase().trim() !== "none";
-}
-
 async function patchSamlidpLocalSettings(
     sourcePk: number,
     idpUuid: string,
@@ -99,12 +95,26 @@ async function patchSamlidpLocalSettings(
         window.location.origin,
     );
 
+    // UI semantics:
+    // enabled=true  => override=false (inherit)
+    // enabled=false => override=true  (force-disable)
+    const verificationOverride = !local.verificationKeyEnabled;
+    const encryptionOverride = !local.encryptionKeyEnabled;
+    const signingOverride = !local.signingKeyEnabled;
+
     const body: PatchLocalSettingsBody = {
         source: sourcePk,
-        verification_kp_mode: enabledToMode(local.verificationKeyEnabled),
-        encryption_kp_mode: enabledToMode(local.encryptionKeyEnabled),
-        signing_kp_mode: enabledToMode(local.signingKeyEnabled),
+
+        verification_kp_override: verificationOverride,
+        encryption_kp_override: encryptionOverride,
+        signing_kp_override: signingOverride,
     };
+
+    // override=true means "use local setting", and since UI has no selector,
+    // local setting is "disabled" => must clear kp explicitly.
+    if (verificationOverride) body.verification_kp = null;
+    if (encryptionOverride) body.encryption_kp = null;
+    if (signingOverride) body.signing_kp = null;
 
     const res = await fetch(url.toString(), {
         method: "PATCH",
@@ -145,20 +155,23 @@ export class SAMLIDPDbLocalSettingsModal extends AKElement {
     rowEntityId = "";
 
     /** DB snapshot fields from parent row */
-    @property({ type: String, attribute: false })
-    verificationKpMode: KPMode | null = null;
+    @property({ type: Boolean })
+    verificationKpOverride = false;
 
-    @property({ type: String, attribute: false })
-    encryptionKpMode: KPMode | null = null;
+    @property({ type: Boolean })
+    encryptionKpOverride = false;
 
-    @property({ type: String, attribute: false })
-    signingKpMode: KPMode | null = null;
+    @property({ type: Boolean })
+    signingKpOverride = false;
 
     // ----- local edit state -----
 
     @state()
     private saving = false;
 
+    // ON/OFF-only UI:
+    // override=false => ON (inherit)
+    // override=true  => OFF (force-disable)
     @state()
     private editVerificationKeyEnabled = true;
 
@@ -180,16 +193,16 @@ export class SAMLIDPDbLocalSettingsModal extends AKElement {
             !!this.idpUuid &&
             (changed.has("open") ||
                 changed.has("idpUuid") ||
-                changed.has("verificationKpMode") ||
-                changed.has("encryptionKpMode") ||
-                changed.has("signingKpMode"));
+                changed.has("verificationKpOverride") ||
+                changed.has("encryptionKpOverride") ||
+                changed.has("signingKpOverride"));
 
         if (!shouldInit) return;
         if (this.initializedForKey === identityKey) return;
 
-        this.editVerificationKeyEnabled = modeToEnabled(this.verificationKpMode);
-        this.editEncryptionKeyEnabled = modeToEnabled(this.encryptionKpMode);
-        this.editSigningKeyEnabled = modeToEnabled(this.signingKpMode);
+        this.editVerificationKeyEnabled = !(this.verificationKpOverride ?? false);
+        this.editEncryptionKeyEnabled = !(this.encryptionKpOverride ?? false);
+        this.editSigningKeyEnabled = !(this.signingKpOverride ?? false);
 
         this.initializedForKey = identityKey;
     }
@@ -222,10 +235,6 @@ export class SAMLIDPDbLocalSettingsModal extends AKElement {
 
     private swallow(ev: Event): void {
         ev.preventDefault?.();
-        ev.stopPropagation();
-    }
-
-    private bubbleOnly(ev: Event): void {
         ev.stopPropagation();
     }
 
@@ -329,7 +338,12 @@ export class SAMLIDPDbLocalSettingsModal extends AKElement {
                 </header>
 
                 <div class="pf-c-modal-box__body" style="padding: 10px 0 0 0;">
-                    <div class="pf-c-form" @submit=${this.swallow} @ak-form-submit=${this.swallow} @ak-submit=${this.swallow}>
+                    <div
+                        class="pf-c-form"
+                        @submit=${this.swallow}
+                        @ak-form-submit=${this.swallow}
+                        @ak-submit=${this.swallow}
+                    >
                         <ak-switch-input
                             name="verificationKeyEnabled"
                             label=${msg("Signature verification")}
@@ -347,7 +361,7 @@ export class SAMLIDPDbLocalSettingsModal extends AKElement {
                             }}
                         ></ak-switch-input>
                         <p class="pf-c-form__helper-text" style="margin-top: -8px; margin-bottom: 12px;">
-                            ${msg("ON uses source default behavior. OFF forces disable for this IdP.")}
+                            ${msg("ON uses source default behavior (automatic if configured). OFF forces disable for this IdP.")}
                         </p>
 
                         <ak-switch-input
@@ -367,7 +381,7 @@ export class SAMLIDPDbLocalSettingsModal extends AKElement {
                             }}
                         ></ak-switch-input>
                         <p class="pf-c-form__helper-text" style="margin-top: -8px; margin-bottom: 12px;">
-                            ${msg("ON uses source default behavior. OFF forces disable for this IdP.")}
+                            ${msg("ON uses source default behavior (automatic if configured). OFF forces disable for this IdP.")}
                         </p>
 
                         <ak-switch-input
@@ -387,12 +401,15 @@ export class SAMLIDPDbLocalSettingsModal extends AKElement {
                             }}
                         ></ak-switch-input>
                         <p class="pf-c-form__helper-text" style="margin-top: -8px;">
-                            ${msg("ON uses source default behavior. OFF forces disable for this IdP.")}
+                            ${msg("ON uses source default behavior (automatic if configured). OFF forces disable for this IdP.")}
                         </p>
                     </div>
                 </div>
 
-                <footer class="pf-c-modal-box__footer" style="padding: 12px 0 0 0; border-top: 1px solid var(--pf-global--BorderColor--100);">
+                <footer
+                    class="pf-c-modal-box__footer"
+                    style="padding: 12px 0 0 0; border-top: 1px solid var(--pf-global--BorderColor--100);"
+                >
                     <div style="display:flex; gap: 10px; justify-content:flex-end;">
                         <ak-spinner-button
                             type="button"

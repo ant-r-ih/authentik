@@ -151,8 +151,16 @@ export class SAMLSourceIDPTab extends AKElement {
                         kind="idp"
                         .ownerPk=${this.source.pk}
                         .ownerLabel=${this.source.name}
-                        @ak-import-finished=${() => this.fetchIDPs()}
-                    ></ak-saml-snapshot-import>
+@ak-import-finished=${async (ev: Event) => {
+    ev.stopPropagation();
+    this.loading = true;
+    try {
+        await this.fetchIdPs();
+     } finally {
+         this.loading = false;
+     }
+ }}
+                        ></ak-saml-snapshot-import>
 
                     <ak-spinner-button slot="trigger" class="pf-m-secondary" type="button">
                         ${msg("Import")}

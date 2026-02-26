@@ -4,12 +4,9 @@ from django.urls import reverse
 from rest_framework.test import APITestCase
 
 from authentik.core.tests.utils import create_test_admin_user, create_test_cert, create_test_flow
-from authentik.crypto.models import CertificateReference
+from authentik.crypto.models import REF_MODEL_SAML_IDP, CertificateReference
 from authentik.lib.generators import generate_id
-from authentik.sources.saml.models import SAMLSource, SAMLIDP
-
-# あなたが追加した定数名に合わせて
-from authentik.crypto.models import REF_MODEL_SAML_IDP
+from authentik.sources.saml.models import SAMLIDP, SAMLSource
 
 
 class TestSAMLIDPAPI(APITestCase):
@@ -49,7 +46,6 @@ class TestSAMLIDPAPI(APITestCase):
 
 
     def _make_source(self) -> SAMLSource:
-        # SAMLSource の必須項目に合わせて調整
         return SAMLSource.objects.create(
             name=generate_id(),
             slug=generate_id(),
@@ -77,7 +73,7 @@ class TestSAMLIDPAPI(APITestCase):
         source = self._make_source()
 
         resp = self.client.post(
-            reverse("authentik_api:samlidp-list"),  # ここは router 名に合わせる
+            reverse("authentik_api:samlidp-list"),
             data={
                 "source": str(source.pk),
                 "name": "IdP1",
@@ -87,8 +83,6 @@ class TestSAMLIDPAPI(APITestCase):
                 "slo_url": None,
                 "verification_kp": None,
                 "encryption_kp": None,
-                # signing_kp をモデルに入れたならここも
-                # "signing_kp": None,
             },
             format="json",
         )

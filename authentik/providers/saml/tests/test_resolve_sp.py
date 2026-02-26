@@ -13,8 +13,8 @@ from authentik.providers.saml.processors.authn_request_parser import AuthNReques
 from authentik.providers.saml.processors.logout_request_parser import LogoutRequestParser
 from authentik.providers.saml.resolve import (
     build_samlsp_config,
-    resolve_acs_url,
-    resolve_verification_kp,
+#    resolve_acs_url,
+#    resolve_verification_kp,
 )
 
 POST_REQUEST = (
@@ -63,8 +63,9 @@ class TestSAMLResolver(TestCase):
             verification_kp=provider_cert,
         )
 
-        self.assertEqual(resolve_acs_url(provider), "https://provider.example/acs")
-        self.assertEqual(resolve_verification_kp(provider), provider_cert)
+        cfg = build_samlsp_config(provider)
+        self.assertEqual(cfg.acs_url, "https://provider.example/acs")
+        self.assertEqual(cfg.verification_kp, provider_cert)
 
     def test_parse_post_sets_samlsp(self):
         provider = SAMLProvider.objects.create(

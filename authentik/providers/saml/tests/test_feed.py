@@ -1,23 +1,29 @@
+from datetime import datetime, timezone
+
 from django.test import TestCase
 
+from authentik.crypto.models import CertificateKeyPair, format_cert
 from authentik.lib.tests.utils import load_fixture
 from authentik.providers.saml.processors.feed import (
+    NS_MAP,
     EntityDescriptorItem,
+    SignatureStatus,
     is_idp_entity,
     is_sp_entity,
     iter_entity_descriptors,
+    summarize_entity_descriptor,
+    verify_entities_descriptor_signature,
 )
-from authentik.providers.saml.processors.feed_summarize import summarize_entity_descriptor
 
-# FIXTURE_XML = "fixtures/edugain-v2-20250822.xml"
-# EXPECTED_TOTAL = 9907
-# EXPECTED_IDP = 6096
-# EXPECTED_SP = 3829
+#FIXTURE_XML = "fixtures/edugain-v2-20250822.xml"
+#EXPECTED_TOTAL = 9907
+#EXPECTED_IDP = 6096
+#EXPECTED_SP = 3829
 
 FIXTURE_XML = "fixtures/gakunin-metadata.xml"
-EXPECTED_TOTAL = 636
-EXPECTED_IDP = 404
-EXPECTED_SP = 232
+EXPECTED_TOTAL = 641
+EXPECTED_IDP = 410
+EXPECTED_SP = 231
 
 XML_SINGLE_ENTITY = """<?xml version="1.0" encoding="UTF-8"?>
 <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
@@ -51,6 +57,17 @@ XML_ENTITIES_WITH_SIGNATURE_NODE = """<?xml version="1.0" encoding="UTF-8"?>
 XML_UNSUPPORTED_ROOT = """<?xml version="1.0" encoding="UTF-8"?>
 <foo xmlns="urn:example">nope</foo>
 """
+
+def _kp_from_entitiesdescriptor_x509(raw: str) -> CertificateKeyPair:
+    from defusedxml.lxml import fromstring
+
+    root = fromstring(raw.encode("utf-8"))
+    nodes = root.xpath("./ds:Signature/ds:KeyInfo/ds:X509Data/ds:X509Certificate/text()", namespaces=NS_MAP)
+    if not nodes:
+        raise AssertionError("fixture does not include ds:X509Certificate")
+    pem = format_cert(nodes[0])
+    return CertificateKeyPair(certificate_data=pem)
+
 class TestCatalogUnwrap(TestCase):
     def test_single_entity_descriptor(self):
         items = list(iter_entity_descriptors(XML_SINGLE_ENTITY))
@@ -132,7 +149,7 @@ class TestCatalogExtract(TestCase):
             summary["container_name_chain"] = list(item.container_name_chain)
             items.append(summary)
 
-        self.assertEqual(len(items), 636)
+        self.assertEqual(len(items), EXPECTED_TOTAL)
         self.assertEqual(
             items[0],
             {
@@ -167,8 +184,11 @@ class TestCatalogExtract(TestCase):
                 "sp": None,
             },
         )
+        for item in items:
+            if item["entity_id"] == "https://secure.nature.com/shibboleth":
+                break
         self.assertEqual(
-            items[459],
+            item,
             {
                 "certs": {"encryption": 1, "signing": 0, "unspecified": 0},
                 "container_name_chain": ["GakuNin"],
@@ -199,4 +219,55 @@ class TestCatalogExtract(TestCase):
                 },
             },
         )
-        self.assertEqual(items[409]["certs"]["encryption"], 4)
+        for item in items:
+            if item["entity_id"] == "https://atlases.muni.cz/shibboleth":
+                break
+        self.assertEqual(item["certs"]["encryption"], 4)
+    def test_signature_unsigned(self):
+        raw = """<?xml version="1.0" encoding="UTF-8"?>
+        <md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" ID="X" Name="root">
+          <md:EntityDescriptor entityID="https://sp.example.org/metadata"/>
+        </md:EntitiesDescriptor>
+        """
+        kp = CertificateKeyPair(certificate_data="")  # unused
+        r = verify_entities_descriptor_signature(raw, signing_cert=kp)
+        self.assertEqual(r.status, SignatureStatus.UNSIGNED)
+
+    def test_signature_ok(self):
+        raw = load_fixture(FIXTURE_XML)
+        kp = _kp_from_entitiesdescriptor_x509(raw)
+
+        r = verify_entities_descriptor_signature(raw, signing_cert=kp)
+        self.assertEqual(r.status, SignatureStatus.OK)
+        self.assertIsNotNone(r.valid_until)
+        self.assertFalse(r.is_stale)
+
+    def test_signature_stale(self):
+        raw = load_fixture(FIXTURE_XML)
+        kp = _kp_from_entitiesdescriptor_x509(raw)
+
+        now_utc = datetime(2100, 1, 1, tzinfo=timezone.utc)
+
+        r = verify_entities_descriptor_signature(raw, signing_cert=kp, now_utc=now_utc)
+        self.assertEqual(r.status, SignatureStatus.STALE)
+        self.assertTrue(r.is_stale)
+
+    def test_signature_invalid_wrong_cert(self):
+        raw = load_fixture(FIXTURE_XML)
+        kp_good = _kp_from_entitiesdescriptor_x509(raw)
+
+        bad_pem = kp_good.certificate_data.replace("A", "B", 1)
+        kp_bad = CertificateKeyPair(certificate_data=bad_pem)
+
+        r = verify_entities_descriptor_signature(raw, signing_cert=kp_bad)
+        self.assertEqual(r.status, SignatureStatus.INVALID)
+
+    def test_signature_error_missing_id_attribute(self):
+        raw = load_fixture(FIXTURE_XML)
+
+        raw2 = raw.replace(' ID="', ' ID_REMOVED="', 1)
+
+        kp = _kp_from_entitiesdescriptor_x509(raw)
+        r = verify_entities_descriptor_signature(raw2, signing_cert=kp)
+
+        self.assertIn(r.status, {SignatureStatus.ERROR, SignatureStatus.INVALID})

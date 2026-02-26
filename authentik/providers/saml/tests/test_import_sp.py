@@ -8,7 +8,8 @@ from authentik.core.tests.utils import create_test_flow
 from authentik.crypto.models import CertificateReference
 from authentik.lib.generators import generate_id
 from authentik.lib.tests.utils import load_fixture
-from authentik.providers.saml.models import SAMLSP, SAMLBindings, SAMLProvider
+from authentik.providers.saml.federation import SAMLSP
+from authentik.providers.saml.models import SAMLBindings, SAMLProvider
 from authentik.providers.saml.processors.feed import is_sp_entity, iter_entity_descriptors
 from authentik.providers.saml.processors.import_sp import import_sp_from_entity_descriptor
 from authentik.providers.saml.utils.certrefs import REF_MODEL_SAML_SP

@@ -7,7 +7,8 @@ from authentik.core.tests.utils import RequestFactory, create_test_cert, create_
 from authentik.lib.generators import generate_id
 from authentik.providers.saml.models import SAMLProvider
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequestParser
-from authentik.sources.saml.models import SAMLSource, SAMLIDP, SAMLIDPKeyOverrideMode
+from authentik.sources.saml.federation import SAMLIDP
+from authentik.sources.saml.models import SAMLSource
 from authentik.sources.saml.processors.request import RequestProcessor
 
 
@@ -47,7 +48,7 @@ class TestRequestProcessorWithIdP(TestCase):
             "signing_kp": None,
             "verification_kp": None,
             "encryption_kp": None,
-            "signing_kp_mode": SAMLIDPKeyOverrideMode.SET,
+            "signing_kp_override": True,
         }
         defaults.update(overrides)
         return SAMLIDP.objects.create(**defaults)

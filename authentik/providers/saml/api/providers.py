@@ -42,7 +42,7 @@ from authentik.core.api.utils import (
 )
 from authentik.core.models import Provider
 from authentik.flows.models import Flow, FlowDesignation
-from authentik.providers.saml.models import SAMLSP, SAMLLogoutMethods, SAMLProvider
+from authentik.providers.saml.models import SAMLLogoutMethods, SAMLProvider
 from authentik.providers.saml.processors.assertion import AssertionProcessor
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequest
 from authentik.providers.saml.processors.metadata import MetadataProcessor

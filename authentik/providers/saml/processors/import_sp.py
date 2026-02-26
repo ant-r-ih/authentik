@@ -2,29 +2,20 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
-from base64 import b64decode
-from typing import Any
 
-from cryptography.hazmat.backends import default_backend
-from cryptography.x509 import load_der_x509_certificate
 from django.db import transaction
 from django.utils import timezone
 from lxml import etree  # nosec
 from structlog import get_logger
 
-from authentik.crypto.models import CertificateKeyPair, fingerprint_sha256
-from authentik.providers.saml.models import (
+from authentik.providers.saml.federation import (
     SAMLSP,
-    SAMLBindings,
-    SAMLProvider,
-    SAMLSPKeyOverrideMode,
     build_runtime_from_snapshot,
     compute_signature_hash,
     normalize_signature,
 )
+from authentik.providers.saml.models import SAMLProvider
 from authentik.providers.saml.processors.feed_extract import (
     NS_MAP,
     extract_all_acs,
@@ -35,6 +26,9 @@ from authentik.providers.saml.processors.feed_extract import (
     pick_preferred_x509_b64,
 )
 from authentik.providers.saml.utils.certrefs import sync_saml_sp_cert_refs
+
+_MDUI_NS = "urn:oasis:names:tc:SAML:metadata:ui"
+_XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
 
 LOGGER = get_logger()
 
@@ -143,18 +137,24 @@ def import_sp_from_entity_descriptor(
         "metadata_snapshot": snapshot,
         "metadata_hash": snapshot_hash,
         "metadata_last_import": timezone.now(),
-
-        # local runtime certs imported from metadata
-        "verification_kp": verification_kp,
-        "encryption_kp": encryption_kp,
-        "verification_kp_mode": (
-            SAMLSPKeyOverrideMode.SET if verification_kp is not None else SAMLSPKeyOverrideMode.INHERIT
-        ),
-        "encryption_kp_mode": (
-            SAMLSPKeyOverrideMode.SET if encryption_kp is not None else SAMLSPKeyOverrideMode.INHERIT
-        ),
         **runtime_defaults,
     }
+
+    if verification_kp is not None:
+        defaults["verification_kp"] = verification_kp
+        defaults["verification_kp_override"] = True
+    else:
+        # metadata に無いなら inherit（＝override off）
+        defaults["verification_kp"] = None
+        defaults["verification_kp_override"] = False
+
+    # encryption cert
+    if encryption_kp is not None:
+        defaults["encryption_kp"] = encryption_kp
+        defaults["encryption_kp_override"] = True
+    else:
+        defaults["encryption_kp"] = None
+        defaults["encryption_kp_override"] = False
 
     if overwrite:
         sp, created = SAMLSP.objects.update_or_create(
@@ -173,9 +173,6 @@ def import_sp_from_entity_descriptor(
 
     sync_saml_sp_cert_refs(sp)
     return sp, created
-
-_MDUI_NS = "urn:oasis:names:tc:SAML:metadata:ui"
-_XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
 
 def _norm_label(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip())

@@ -6,7 +6,10 @@ from authentik.core.tests.utils import (
     create_test_flow,
     generate_id,
 )
-from authentik.providers.saml.models import SAMLSP, SAMLProvider
+from authentik.providers.saml.federation import (
+    SAMLSP,
+)
+from authentik.providers.saml.models import SAMLProvider
 
 
 class TestSAMLSPSetEnabledAPI(APITestCase):

@@ -42,7 +42,9 @@ class AuthNRequest:
     """AuthNRequest Dataclass"""
 
     id: str | None = None
+
     relay_state: str | None = None
+
     name_id_policy: str = SAML_NAME_ID_FORMAT_UNSPECIFIED
 
     # parsed/derived
@@ -66,6 +68,9 @@ class AuthNRequestParser:
     def _parse_xml(self, decoded_xml: str | bytes, relay_state: str | None) -> AuthNRequest:
         root = ElementTree.fromstring(decoded_xml)
 
+        # http://docs.oasis-open.org/security/saml/v2.0/saml-core-2.0-os.pdf
+        # `AssertionConsumerServiceURL` can be omitted, and we should fallback to the
+        # default ACS URL
         issuer = peek_issuer(root)
         sp = self.provider.get_sp(issuer)
 
@@ -79,27 +84,25 @@ class AuthNRequestParser:
             request_acs_url=request_acs_url,
             request_sp_binding=request_sp_binding,
         )
-
         auth_n_request = AuthNRequest(id=root.attrib.get("ID"), relay_state=relay_state)
         auth_n_request.issuer = issuer
         auth_n_request.sp = sp
         auth_n_request.acs_url = target.acs_url
         auth_n_request.sp_binding = target.sp_binding
 
-        # NameIDPolicy
+
+        # Check if AuthnRequest has a NameID Policy object
         name_id_policies = root.findall(f"{{{NS_SAML_PROTOCOL}}}NameIDPolicy")
         if name_id_policies:
             name_id_policy = name_id_policies[0]
             auth_n_request.name_id_policy = name_id_policy.attrib.get(
                 "Format", SAML_NAME_ID_FORMAT_UNSPECIFIED
             )
-
-        # Build request-scoped config (includes target)
         auth_n_request.cfg = build_samlsp_config(self.provider, sp, target=target)
         return auth_n_request
 
     def parse(self, saml_request: str, relay_state: str | None = None) -> AuthNRequest:
-        """Validate and parse raw request with enveloped signature."""
+        """Validate and parse raw request with enveloped signautre."""
         try:
             decoded_xml = b64decode(saml_request.encode())
         except UnicodeDecodeError:
@@ -130,14 +133,15 @@ class AuthNRequestParser:
         if not verifier:
             return self._parse_xml(decoded_xml, relay_state)
 
-        # Enveloped signature verification
         root = lxml_from_string(decoded_xml)
         xmlsec.tree.add_ids(root, ["ID"])
         signature_nodes = root.xpath("/samlp:AuthnRequest/ds:Signature", namespaces=NS_MAP)
+        # No signatures, no verifier configured -> decode xml directly
         if len(signature_nodes) < 1:
             raise CannotHandleAssertion(ERROR_SIGNATURE_REQUIRED_BUT_ABSENT)
 
         signature_node = signature_nodes[0]
+
         if signature_node is not None:
             try:
                 ctx = xmlsec.SignatureContext()
@@ -151,7 +155,6 @@ class AuthNRequestParser:
             except xmlsec.Error as exc:
                 raise CannotHandleAssertion(ERROR_FAILED_TO_VERIFY) from exc
 
-        # Parse fully (will also attach cfg)
         return self._parse_xml(decoded_xml, relay_state)
 
     def parse_detached(
@@ -161,7 +164,7 @@ class AuthNRequestParser:
         signature: str | None = None,
         sig_alg: str | None = None,
     ) -> AuthNRequest:
-        """Validate and parse raw request with detached signature."""
+        """Validate and parse raw request with detached signature"""
         try:
             decoded_xml = decode_base64_and_inflate(saml_request)
         except UnicodeDecodeError:
@@ -231,7 +234,7 @@ class AuthNRequestParser:
             raise CannotHandleAssertion(ERROR_FAILED_TO_VERIFY) from exc
 
     def idp_initiated(self) -> AuthNRequest:
-        """Create IdP Initiated AuthNRequest."""
+        """Create IdP Initiated AuthNRequest"""
         request = AuthNRequest(relay_state=None)
         if self.provider.default_relay_state != "":
             request.relay_state = self.provider.default_relay_state

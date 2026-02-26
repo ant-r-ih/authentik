@@ -21,11 +21,7 @@ from authentik.flows.planner import PLAN_CONTEXT_APPLICATION
 from authentik.flows.stage import ChallengeStageView
 from authentik.lib.views import bad_request_message
 from authentik.policies.utils import delete_none_values
-from authentik.providers.saml.models import (
-    SAMLSP,
-    SAMLProvider,
-    SAMLSession,
-)
+from authentik.providers.saml.models import SAMLBindings, SAMLProvider, SAMLSession
 from authentik.providers.saml.processors.assertion import AssertionProcessor
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequest
 from authentik.providers.saml.utils.encoding import deflate_and_base64_encode, nice64
@@ -107,7 +103,7 @@ class SAMLFlowFinalView(ChallengeStageView):
             flow=self.executor.plan.flow_pk,
         ).from_http(self.request)
 
-        if auth_n_request.sp_binding == SAML_BINDING_POST:
+        if auth_n_request.sp_binding == SAMLBindings.POST:
             form_attrs = delete_none_values(
                 {
                     REQUEST_KEY_SAML_RESPONSE: nice64(response),
@@ -126,17 +122,15 @@ class SAMLFlowFinalView(ChallengeStageView):
                     "attrs": form_attrs,
                 },
             )
-        if auth_n_request.sp_binding == SAML_BINDING_REDIRECT:
+        if auth_n_request.sp_binding == SAMLBindings.REDIRECT:
             url_args = {
                 REQUEST_KEY_SAML_RESPONSE: deflate_and_base64_encode(response),
             }
             if auth_n_request.relay_state:
                 url_args[REQUEST_KEY_RELAY_STATE] = auth_n_request.relay_state
             querystring = urlencode(url_args)
-            return redirect(
-                f"{auth_n_request.acs_url if auth_n_request.acs_url else provider.acs_url}?{querystring}"  # noqa: E501
-            )
-        return bad_request_message(request, f"Invalid sp_binding specified: {auth_n_request.sp_binding}")
+            return redirect(f"{auth_n_request.acs_url if auth_n_request.acs_url else provider.acs_url}?{querystring}")
+        return bad_request_message(request, "Invalid sp_binding specified")
 
     def get_challenge(self, *args, **kwargs) -> Challenge:
         return AutosubmitChallenge(data=kwargs)

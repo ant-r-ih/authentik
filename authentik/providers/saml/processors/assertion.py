@@ -17,12 +17,6 @@ from authentik.events.signals import get_login_event
 from authentik.lib.utils.time import timedelta_from_string
 from authentik.providers.saml.models import SAMLPropertyMapping, SAMLProvider
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequest
-from authentik.providers.saml.resolve import (
-    resolve_digest_algorithm,
-    resolve_encryption_kp,
-    resolve_signature_algorithm,
-    resolve_signing_kp,
-)
 from authentik.providers.saml.utils import get_random_id
 from authentik.providers.saml.utils.time import get_time_string
 from authentik.sources.ldap.auth import LDAP_DISTINGUISHED_NAME
@@ -74,6 +68,7 @@ class AssertionProcessor:
         self.provider = provider
         self.http_request = request
         self.auth_n_request = auth_n_request
+        self.cfg = auth_n_request.cfg
 
         self._issue_instant = get_time_string()
         self._assertion_id = get_random_id()
@@ -97,13 +92,16 @@ class AssertionProcessor:
 
     def get_attributes(self) -> Element:
         """Get AttributeStatement Element with Attributes from Property Mappings."""
+        # https://commons.lbl.gov/display/IDMgmt/Attribute+Definitions
         attribute_statement = Element(f"{{{NS_SAML_ASSERTION}}}AttributeStatement")
         user = self.http_request.user
 
-        cfg = getattr(self.auth_n_request, "cfg", None)
+        # cfg = getattr(self.auth_n_request, "cfg", None)
+        cfg = self.cfg
         mappings_qs = None
 
-        if cfg is not None and getattr(cfg, "property_mappings", None) is not None:
+        # if cfg is not None and getattr(cfg, "property_mappings", None) is not None:
+        if getattr(cfg, "property_mappings", None) is not None:
             mappings_qs = cfg.property_mappings
             if hasattr(mappings_qs, "all"):
                 mappings_qs = mappings_qs.all()
@@ -325,7 +323,6 @@ class AssertionProcessor:
         if self.auth_n_request.id:
             subject_confirmation_data.attrib["InResponseTo"] = self.auth_n_request.id
         subject_confirmation_data.attrib["NotOnOrAfter"] = self._valid_not_on_or_after
-        #        subject_confirmation_data.attrib["Recipient"] = self.provider.acs_url
         subject_confirmation_data.attrib["Recipient"] = self.auth_n_request.acs_url
         return subject
 
@@ -337,8 +334,8 @@ class AssertionProcessor:
         assertion.attrib["IssueInstant"] = self._issue_instant
         assertion.append(self.get_issuer())
 
-        signing_kp = resolve_signing_kp(self.provider)
-        signature_alg = resolve_signature_algorithm(self.provider)
+        signing_kp = self.cfg.signing_kp #resolve_signing_kp(self.provider)
+        signature_alg = self.cfg.signature_algorithm #resolve_signature_algorithm(self.provider)
 
         if signing_kp and self.provider.sign_assertion:
             sign_algorithm_transform = SIGN_ALGORITHM_TRANSFORM_MAP.get(
@@ -355,6 +352,7 @@ class AssertionProcessor:
         assertion.append(self.get_assertion_subject())
         assertion.append(self.get_assertion_conditions())
         assertion.append(self.get_assertion_auth_n_statement())
+
         assertion.append(self.get_attributes())
         return assertion
 
@@ -370,9 +368,8 @@ class AssertionProcessor:
 
         response.append(self.get_issuer())
 
-        signing_kp = resolve_signing_kp(self.provider)
-        signature_alg = resolve_signature_algorithm(self.provider)
-
+        signing_kp = self.cfg.signing_kp
+        signature_alg = self.cfg.signature_algorithm
         if signing_kp and self.provider.sign_response:
             sign_algorithm_transform = SIGN_ALGORITHM_TRANSFORM_MAP.get(
                 signature_alg, xmlsec.constants.TransformRsaSha1
@@ -394,20 +391,16 @@ class AssertionProcessor:
 
     def _sign(self, element: Element):
         """Sign an XML element based on the providers' configured signing settings"""
-        signing_kp = resolve_signing_kp(self.provider)
+        signing_kp = self.cfg.signing_kp
         if not signing_kp:
             raise InvalidSignature()
-
-        digest_alg = resolve_digest_algorithm(self.provider)
-        sig_alg = resolve_signature_algorithm(self.provider)
-
+        digest_alg = self.cfg.digest_algorithm
+        sig_alg = self.cfg.signature_algorithm
         digest_algorithm_transform = DIGEST_ALGORITHM_TRANSLATION_MAP.get(
             digest_alg, xmlsec.constants.TransformSha1
         )
-
         xmlsec.tree.add_ids(element, ["ID"])
         signature_node = xmlsec.tree.find_node(element, xmlsec.constants.NodeSignature)
-
         ref = xmlsec.template.add_reference(
             signature_node,
             digest_algorithm_transform,
@@ -437,12 +430,14 @@ class AssertionProcessor:
 
     def _encrypt(self, element: Element, parent: Element):
         """Encrypt SAMLResponse EncryptedAssertion Element"""
-        encryption_kp = resolve_encryption_kp(self.provider)
+        # Create a standalone copy so namespace declarations are included in the encrypted content
+        encryption_kp = self.cfg.encryption_kp #resolve_encryption_kp(self.provider)
         if not encryption_kp:
             raise InvalidEncryption()
-
         element_xml = etree.tostring(element)
         standalone_element = etree.fromstring(element_xml)
+
+        # Remove the original element from the tree since we're replacing it with encrypted version
         parent.remove(element)
 
         manager = xmlsec.KeysManager()
@@ -450,6 +445,7 @@ class AssertionProcessor:
             encryption_kp.certificate_data,
             xmlsec.constants.KeyDataFormatCertPem,
         )
+
         manager.add_key(key)
         encryption_context = xmlsec.EncryptionContext(manager)
         encryption_context.key = xmlsec.Key.generate(
@@ -471,11 +467,11 @@ class AssertionProcessor:
             raise InvalidEncryption() from exc
 
         container.append(enc_data)
+
     def build_response(self) -> str:
         """Build string XML Response and sign if signing is enabled."""
         root_response = self.get_response()
-
-        signing_kp = resolve_signing_kp(self.provider)
+        signing_kp = self.cfg.signing_kp
         if signing_kp:
             if self.provider.sign_assertion:
                 assertion = root_response.xpath("//saml:Assertion", namespaces=NS_MAP)[0]
@@ -483,10 +479,8 @@ class AssertionProcessor:
             if self.provider.sign_response:
                 response = root_response.xpath("//samlp:Response", namespaces=NS_MAP)[0]
                 self._sign(response)
-
-        encryption_kp = resolve_encryption_kp(self.provider)
+        encryption_kp = self.cfg.encryption_kp
         if encryption_kp:
             assertion = root_response.xpath("//saml:Assertion", namespaces=NS_MAP)[0]
             self._encrypt(assertion, root_response)
-
         return etree.tostring(root_response).decode("utf-8")  # nosec

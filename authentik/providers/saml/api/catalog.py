@@ -2,31 +2,32 @@ from __future__ import annotations
 
 import gzip
 from io import BytesIO
-from typing import Any, Optional
+from typing import Any
 
-from django.shortcuts import get_object_or_404
 from lxml import etree  # nosec
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.request import Request
 from rest_framework.response import Response
 
 from authentik.admin.files.manager import FileManager
 from authentik.admin.files.usage import FileUsage
-from authentik.providers.saml.models import (
+from authentik.crypto.models import CertificateKeyPair
+from authentik.providers.saml.federation import (
     SAMLSP,
-    SAMLProvider,
     compute_signature_hash,
     current_runtime_signature,
     expected_runtime_signature_from_snapshot,
     normalize_signature,
 )
+from authentik.providers.saml.models import SAMLProvider
 from authentik.providers.saml.processors.feed import (
     is_idp_entity,
     is_sp_entity,
     iter_entity_descriptors,
+    summarize_entity_descriptor,
+    verify_entities_descriptor_signature,
 )
 
 # Reuse existing extractors (same as import)
@@ -34,7 +35,6 @@ from authentik.providers.saml.processors.feed_extract import (
     extract_sp_descriptor,
     extract_x509_b64_list,
 )
-from authentik.providers.saml.processors.feed_summarize import summarize_entity_descriptor
 from authentik.providers.saml.processors.import_sp import extract_all_acs, extract_all_sls
 
 MAX_EXPANDED_BYTES = 200 * 1024 * 1024 # 200MB for eduGAIN metadata feed (expanded)
@@ -138,6 +138,11 @@ def _maybe_decompress_metadata(raw: bytes, *, name: str = "") -> bytes:
 class SAMLMetadataCatalogUploadSerializer(serializers.Serializer):
     file = serializers.FileField(required=False)
     metadata_name = serializers.CharField(required=False)
+    signing_certificate = serializers.PrimaryKeyRelatedField(
+        queryset=CertificateKeyPair.objects.all(),
+        required=False,
+        allow_null=True,
+    )
 
 class SAMLMetadataCatalogViewSet(viewsets.ViewSet):
     queryset = SAMLSP.objects.none()
@@ -169,6 +174,16 @@ class SAMLMetadataCatalogViewSet(viewsets.ViewSet):
         except FileNotFoundError:
             raise ValidationError({"metadata_name": ["File not found."]})
 
+        sig_cert: CertificateKeyPair | None = ser.validated_data.get("signing_certificate")
+
+        sig_result = None
+        if sig_cert is not None:
+            sig_result = verify_entities_descriptor_signature(raw, signing_cert=sig_cert)
+        else:
+            sig_result = {
+                "status": "skipped",   # or "unsigned"/"unknown"
+                "message": "Signature verification skipped (no certificate provided).",
+            }
         try:
             provider = _get_provider_from_request(request, kwargs=getattr(self, "kwargs", None))
         except ValidationError:
@@ -214,7 +229,15 @@ class SAMLMetadataCatalogViewSet(viewsets.ViewSet):
             summary["states"] = states
             out.append(summary)
 
-        return Response(out, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "meta": {
+                    "signature": sig_result,
+                },
+            "items": out,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=False, methods=["POST"], url_path="entity")
     def entity(self, request):
