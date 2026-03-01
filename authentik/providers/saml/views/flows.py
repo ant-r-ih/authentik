@@ -103,7 +103,7 @@ class SAMLFlowFinalView(ChallengeStageView):
             flow=self.executor.plan.flow_pk,
         ).from_http(self.request)
 
-        if auth_n_request.sp_binding == SAMLBindings.POST:
+        if auth_n_request.sp_binding == SAML_BINDING_POST:
             form_attrs = delete_none_values(
                 {
                     REQUEST_KEY_SAML_RESPONSE: nice64(response),
@@ -122,7 +122,7 @@ class SAMLFlowFinalView(ChallengeStageView):
                     "attrs": form_attrs,
                 },
             )
-        if auth_n_request.sp_binding == SAMLBindings.REDIRECT:
+        if auth_n_request.sp_binding == SAML_BINDING_REDIRECT:
             url_args = {
                 REQUEST_KEY_SAML_RESPONSE: deflate_and_base64_encode(response),
             }
