@@ -41,12 +41,14 @@ export class FileListPage extends WithCapabilitiesConfig(TablePage<FileItem>) {
 
     @property({ type: String, useDefault: true })
     public order: FileListOrderKey = "name";
+    @property({ type: String, useDefault: true })
+    public usage: UsageEnum = UsageEnum.Media;
 
     async apiEndpoint(): Promise<PaginatedResponse<FileItem>> {
         const api = aki(AdminApi);
         // Cast necessary: API returns File objects but we only use name, url, and mimeType properties
         const items = (await api.adminFileList({
-            usage: UsageEnum.Media,
+            usage: this.usage,
             manageableOnly: true,
             ...(this.search ? { search: this.search } : {}),
         })) as unknown as FileItem[];
@@ -60,6 +62,50 @@ export class FileListPage extends WithCapabilitiesConfig(TablePage<FileItem>) {
         [msg("Type")],
         [msg("Actions"), null, msg("Row Actions")],
     ];
+
+    /** Render usage selector for switching between media and SAML metadata files. */
+    protected renderSectionBefore(): TemplateResult {
+        return html`
+            <div class="pf-c-page__main-section">
+                <div class="pf-c-card">
+                    <div class="pf-c-card__body">
+                        <div class="pf-c-form pf-m-horizontal">
+                            <div class="pf-c-form__group">
+                                <label class="pf-c-form__label" for="ak-file-usage">
+                                    <span class="pf-c-form__label-text">${msg("Usage")}</span>
+                                </label>
+                                <div class="pf-c-form__group-control">
+                                    <select
+                                        id="ak-file-usage"
+                                        class="pf-c-form-control"
+                                        @change=${(ev: Event) => {
+                                            this.usage = (ev.target as HTMLSelectElement)
+                                                .value as UsageEnum;
+                                            this.page = 1;
+                                            this.fetch();
+                                        }}
+                                    >
+                                        <option
+                                            value=${UsageEnum.Media}
+                                            ?selected=${this.usage === UsageEnum.Media}
+                                        >
+                                            ${msg("Media")}
+                                        </option>
+                                        <option
+                                            value=${UsageEnum.SamlMetadata}
+                                            ?selected=${this.usage === UsageEnum.SamlMetadata}
+                                        >
+                                            ${msg("SAML metadata")}
+                                        </option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
 
     renderToolbarSelected() {
         if (!this.can(CapabilitiesEnum.CanSaveMedia)) {
@@ -84,7 +130,7 @@ export class FileListPage extends WithCapabilitiesConfig(TablePage<FileItem>) {
             .delete=${(item: FileItem) => {
                 return aki(AdminApi).adminFileDestroy({
                     name: item.name,
-                    usage: UsageEnum.Media,
+                    usage: this.usage,
                 });
             }}
         >
@@ -143,7 +189,7 @@ export class FileListPage extends WithCapabilitiesConfig(TablePage<FileItem>) {
             <ak-forms-modal>
                 <span slot="submit">${msg("Upload")}</span>
                 <span slot="header">${msg("Upload File")}</span>
-                <ak-file-upload-form slot="form"> </ak-file-upload-form>
+                <ak-file-upload-form slot="form" .usage=${this.usage}> </ak-file-upload-form>
                 <button slot="trigger" class="pf-c-button pf-m-primary">
                     ${msg("Upload File")}
                 </button>

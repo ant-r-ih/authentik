@@ -61,6 +61,7 @@ export class FileUploadForm extends Form<Record<string, unknown>> {
         this.selectedFile = null;
     }
 
+    /** Track currently selected file so submit can send it with optional renamed path. */
     #fileChangeListener = (e: Event) => {
         const input = e.target as HTMLInputElement;
         if (input.files?.length) {
@@ -105,7 +106,13 @@ export class FileUploadForm extends Form<Record<string, unknown>> {
         this.clearFileInput();
     }
 
+    /** Render upload controls and narrow accepted MIME/extensions by selected usage. */
     renderForm() {
+        const accept =
+            this.usage === UsageEnum.SamlMetadata
+                ? ".xml,.gz,application/xml,text/xml,application/gzip"
+                : "";
+
         return html`
             <form ${ref(this.#formRef)} class="pf-c-form pf-m-horizontal">
                 <ak-form-element-horizontal label=${msg("File")} required>
@@ -113,6 +120,7 @@ export class FileUploadForm extends Form<Record<string, unknown>> {
                         type="file"
                         class="pf-c-form-control"
                         id="file-input"
+                        accept=${accept}
                         required
                         @change=${this.#fileChangeListener}
                     />

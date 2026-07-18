@@ -187,3 +187,37 @@ class TestThemedUrls(FileTestFileBackendMixin, TestCase):
         # External URLs without %(theme)s should return None
         result = manager.themed_urls("https://example.com/logo.png")
         self.assertIsNone(result)
+
+
+class TestOpenFileStream(FileTestFileBackendMixin, TestCase):
+    """Test FileManager.open_file_stream method"""
+
+    def test_open_file_stream_reads_content(self):
+        manager = FileManager(FileUsage.MEDIA)
+
+        # Arrange: create file in file backend base path
+        base_path = manager.management_backend.base_path  # type: ignore[attr-defined]
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        file_name = "stream_read.txt"
+        content = b"hello manager stream"
+        (base_path / file_name).write_bytes(content)
+
+        # Act
+        with manager.open_file_stream(file_name, "rb") as f:
+            got = f.read()
+
+        # Assert
+        self.assertEqual(got, content)
+
+    def test_open_file_stream_empty_name_raises(self):
+        manager = FileManager(FileUsage.MEDIA)
+        with self.assertRaises(FileNotFoundError):
+            with manager.open_file_stream("", "rb") as f:
+                f.read()
+
+    def test_open_file_stream_missing_file_raises(self):
+        manager = FileManager(FileUsage.SAML_METADATA)
+        with self.assertRaises(FileNotFoundError):
+            with manager.open_file_stream("does_not_exist.xml", "rb") as f:
+                f.read()
