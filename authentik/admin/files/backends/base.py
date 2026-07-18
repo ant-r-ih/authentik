@@ -203,6 +203,10 @@ class ManageableBackend(Backend):
             request_key = f"{request.build_absolute_uri('/')}"
         return f"{CACHE_PREFIX}/{self.name}/{self.usage}/{request_key}/{name}"
 
+    def open_file_stream(self, name: str, mode: str = "rb") -> Iterator:
+        """Open a managed file for streaming reads."""
+        raise NotImplementedError
+
     def _cache_get_or_set(
         self,
         name: str,

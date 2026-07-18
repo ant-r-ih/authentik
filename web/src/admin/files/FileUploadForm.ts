@@ -74,6 +74,12 @@ export class FileUploadForm extends Form<FileUploadFormData> {
     protected override renderForm(): SlottedTemplateResult {
         const validationMessage = formatValidationMessage();
 
+        // Narrow accepted MIME/extensions when uploading SAML metadata files.
+        const accept =
+            this.usage === UsageEnum.SamlMetadata
+                ? ".xml,.gz,application/xml,text/xml,application/gzip"
+                : "";
+
         return html`<ak-form-element-horizontal required name="file">
                 ${AKLabel(
                     {
@@ -84,7 +90,13 @@ export class FileUploadForm extends Form<FileUploadFormData> {
                     },
                     msg("File"),
                 )}
-                <input type="file" class="pf-c-form-control" id="file-input" required />
+                <input
+                    type="file"
+                    class="pf-c-form-control"
+                    id="file-input"
+                    accept=${accept}
+                    required
+                />
             </ak-form-element-horizontal>
             <ak-text-input
                 name="name"
