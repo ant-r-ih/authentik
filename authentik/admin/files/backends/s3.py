@@ -1,5 +1,6 @@
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
+from io import TextIOWrapper
 from tempfile import SpooledTemporaryFile
 from typing import Any, TypeVar
 from urllib.parse import urlsplit, urlunsplit
@@ -282,3 +283,26 @@ class S3Backend(ManageableBackend):
             return True
         except ClientError:
             return False
+
+    @contextmanager
+    def open_file_stream(self, name: str, mode: str = "rb") -> Iterator:
+        """Context manager for streaming file reads from S3."""
+        if "r" not in mode:
+            raise ValueError("S3Backend open_file_stream only supports read modes")
+
+        with SpooledTemporaryFile(max_size=5 * 1024 * 1024, suffix=".S3ReadFile") as file:
+            try:
+                self.client.download_fileobj(
+                    Bucket=self.bucket_name,
+                    Key=f"{self.base_path}/{name}",
+                    Fileobj=file,
+                )
+            except ClientError as exc:
+                raise FileNotFoundError(name) from exc
+
+            file.seek(0)
+            if "b" in mode:
+                yield file
+            else:
+                with TextIOWrapper(file, encoding="utf-8") as text_stream:
+                    yield text_stream

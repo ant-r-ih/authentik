@@ -193,3 +193,35 @@ class TestFileBackend(FileTestFileBackendMixin, TestCase):
         self.assertIsInstance(result, dict)
         self.assertIn("light/logo-light.svg", result["light"])
         self.assertIn("dark/logo-dark.svg", result["dark"])
+
+    def test_open_file_stream(self):
+        """Test open_file_stream context manager reads file correctly"""
+        content = b"read stream content"
+        file_name = "read_test.bin"
+
+        # create file
+        self.backend.save_file(file_name, content)
+
+        # read back via stream
+        with self.backend.open_file_stream(file_name, "rb") as f:
+            got = f.read()
+
+        self.assertEqual(got, content)
+
+    def test_open_file_stream_nested_path(self):
+        """Test open_file_stream works with nested path"""
+        content = b"nested read"
+        file_name = "dir1/dir2/read.bin"
+
+        self.backend.save_file(file_name, content)
+
+        with self.backend.open_file_stream(file_name, "rb") as f:
+            got = f.read()
+
+        self.assertEqual(got, content)
+
+    def test_open_file_stream_missing_file_raises(self):
+        """Test open_file_stream raises for missing file"""
+        with self.assertRaises(FileNotFoundError):
+            with self.backend.open_file_stream("nope.bin", "rb") as f:
+                f.read()

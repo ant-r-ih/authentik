@@ -1,4 +1,5 @@
 from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 
 from django.core.exceptions import ImproperlyConfigured
 from django.http.request import HttpRequest
@@ -163,6 +164,23 @@ class FileManager:
         self._check_manageable()
         assert self.management_backend is not None  # nosec
         return self.management_backend.file_exists(file_path)
+
+    @contextmanager
+    def open_file_stream(self, name: str, mode: str = "rb") -> Iterator:
+        """Open a file stream using the first matching manageable backend."""
+        if not name:
+            raise FileNotFoundError("empty name")
+
+        for backend in self.backends:
+            if not backend.supports_file(name):
+                continue
+            if not isinstance(backend, ManageableBackend):
+                break
+            with backend.open_file_stream(name, mode) as f:
+                yield f
+            return
+
+        raise FileNotFoundError(name)
 
 
 MANAGERS = {usage: FileManager(usage) for usage in list(FileUsage)}

@@ -39,11 +39,13 @@ export class FileListPage extends WithCapabilitiesConfig(TablePage<FileListItem>
 
     @property({ type: String, useDefault: true })
     public order: FileListOrderKey = "name";
+    @property({ type: String, useDefault: true })
+    public usage: UsageEnum = UsageEnum.Media;
 
     async apiEndpoint(): Promise<PaginatedResponse<FileListItem>> {
         const api = aki(AdminApi);
         const items = await api.adminFileList({
-            usage: UsageEnum.Media,
+            usage: this.usage,
             manageableOnly: true,
             ...(this.search ? { search: this.search } : {}),
         });
@@ -57,6 +59,50 @@ export class FileListPage extends WithCapabilitiesConfig(TablePage<FileListItem>
         [msg("Type")],
         [msg("Actions"), null, msg("Row Actions")],
     ];
+
+    /** Render usage selector for switching between media and SAML metadata files. */
+    protected override renderSectionBefore(): TemplateResult {
+        return html`
+            <div class="pf-c-page__main-section">
+                <div class="pf-c-card">
+                    <div class="pf-c-card__body">
+                        <div class="pf-c-form pf-m-horizontal">
+                            <div class="pf-c-form__group">
+                                <label class="pf-c-form__label" for="ak-file-usage">
+                                    <span class="pf-c-form__label-text">${msg("Usage")}</span>
+                                </label>
+                                <div class="pf-c-form__group-control">
+                                    <select
+                                        id="ak-file-usage"
+                                        class="pf-c-form-control"
+                                        @change=${(ev: Event) => {
+                                            this.usage = (ev.target as HTMLSelectElement)
+                                                .value as UsageEnum;
+                                            this.page = 1;
+                                            this.fetch();
+                                        }}
+                                    >
+                                        <option
+                                            value=${UsageEnum.Media}
+                                            ?selected=${this.usage === UsageEnum.Media}
+                                        >
+                                            ${msg("Media")}
+                                        </option>
+                                        <option
+                                            value=${UsageEnum.SamlMetadata}
+                                            ?selected=${this.usage === UsageEnum.SamlMetadata}
+                                        >
+                                            ${msg("SAML metadata")}
+                                        </option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
 
     protected override renderToolbarSelected() {
         if (!this.can(CapabilitiesEnum.CanSaveMedia)) {
@@ -83,7 +129,7 @@ export class FileListPage extends WithCapabilitiesConfig(TablePage<FileListItem>
             .delete=${(item: FileListItem) => {
                 return aki(AdminApi).adminFileDestroy({
                     name: item.name,
-                    usage: UsageEnum.Media,
+                    usage: this.usage,
                 });
             }}
         >
@@ -135,7 +181,7 @@ export class FileListPage extends WithCapabilitiesConfig(TablePage<FileListItem>
     }
 
     protected override renderObjectCreate(): SlottedTemplateResult {
-        return ModalInvokerButton(FileUploadForm);
+        return ModalInvokerButton(FileUploadForm, { usage: this.usage });
     }
 }
 
