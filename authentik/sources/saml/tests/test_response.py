@@ -1,6 +1,6 @@
 """SAML Source tests"""
 
-from base64 import b64encode  # noqa: I001
+from base64 import b64encode
 
 from django.test import TestCase
 from freezegun import freeze_time
@@ -13,8 +13,7 @@ from authentik.core.tests.utils import (
     create_test_flow,
     create_test_user,
 )
-from authentik.crypto.models import CertificateKeyPairRing, CertificateKeyPairRingBinding
-from authentik.crypto.models import CertificateKeyPair
+from authentik.crypto.models import CertificateKeyPair, CertificateKeyPairRing, CertificateKeyPairRingBinding
 from authentik.lib.generators import generate_id
 from authentik.lib.tests.utils import load_fixture
 from authentik.sources.saml.exceptions import InvalidEncryption, InvalidSignature
@@ -25,9 +24,12 @@ from authentik.sources.saml.models import (
 )
 from authentik.sources.saml.processors.response import ResponseProcessor
 
+
 def _ring_add_keypairs(*, ring: CertificateKeyPairRing, keypairs: list[CertificateKeyPair]) -> None:
+    """Add keypairs to a ring in deterministic priority order."""
     for i, kp in enumerate(keypairs):
         CertificateKeyPairRingBinding.objects.create(ring=ring, keypair=kp, order=i)
+
 
 class TestResponseProcessor(TestCase):
     """Test ResponseProcessor"""
@@ -359,7 +361,7 @@ class TestResponseProcessor(TestCase):
         full_name_id = "_ce3d2948b4cf20146dee0a0b3dd6f69b6cf86f62d7"
         # The text before the comment, which is what ``name_id.text`` returns.
         truncated_name_id = "_ce3d2948b4cf20146dee0a0b3dd6f"
-        commented_name_id = f"{truncated_name_id}<!--x-->{full_name_id[len(truncated_name_id):]}"
+        commented_name_id = f"{truncated_name_id}<!--x-->{full_name_id[len(truncated_name_id) :]}"
         fixture = load_fixture("fixtures/response_signed_assertion.xml").replace(
             full_name_id, commented_name_id
         )
@@ -423,7 +425,7 @@ class TestResponseProcessor(TestCase):
             root=parser._root, assertion=parser.get_assertion(), name_id=name_id_el
         )
         # The attribute value must not be truncated at the comment.
-        self.assertEqual(properties["mail"], "test@example.com")
+        self.assertEqual(properties["email"], "test@example.com")
 
     @freeze_time("2014-07-17T01:02:18Z")
     def test_verification_response(self):
@@ -570,7 +572,7 @@ class TestResponseProcessor(TestCase):
         parser = ResponseProcessor(self.source, request)
         parser.parse()
 
-    @freeze_time("2026-01-21T14:23")
+    @freeze_time("2026-01-21T14:23:00Z")
     def test_transient(self):
         """Test SAML transient NameID"""
         verification_key = load_fixture("fixtures/signature_cert2.pem")
@@ -592,10 +594,141 @@ class TestResponseProcessor(TestCase):
 
         parser = ResponseProcessor(self.source, request)
         parser.parse()
-        parser.prepare_flow_manager()
+        sfm = parser.prepare_flow_manager()
 
-    @freeze_time("2022-10-14T14:16:40Z")
-    def test_verification_assertion_with_ring(self):
+        self.assertEqual(sfm.identifier, "test001@example.org")
+        self.assertEqual(
+            sfm.user_properties,
+            {
+                "username": "test001@example.org",
+                "path": self.source.get_user_path(),
+                "attributes": {},
+                "email": "test001@mail.example.org",
+                "eppn": "test001@example.org",
+                "uid": "test001",
+                "urn:oid:1.3.6.1.4.1.25178.1.2.9": "example.org",
+            },
+        )
+
+    @freeze_time("2025-11-22T11:53:00Z")
+    def test_transient_simple(self):
+        """Test SAML transient NameID without stable attributes."""
+        request = self.factory.post(
+            "/",
+            data={
+                "SAMLResponse": b64encode(
+                    load_fixture("fixtures/response_transient_simple.xml").encode()
+                ).decode()
+            },
+        )
+
+        parser = ResponseProcessor(self.source, request)
+        parser.parse()
+        sfm = parser.prepare_flow_manager()
+
+        username = "_ef5783d83c0d4147212322815d7e4064"
+        self.assertEqual(sfm.identifier, username)
+        self.assertEqual(
+            sfm.user_properties,
+            {
+                "username": username,
+                "path": self.source.get_user_path(),
+                "urn:oid:1.3.6.1.4.1.25178.1.2.9": "example.org",
+                "attributes": {
+                    "goauthentik.io/user/delete-on-logout": True,
+                    "goauthentik.io/user/expires": 1763898780.0,
+                    "goauthentik.io/user/generated": True,
+                    "goauthentik.io/user/sources": [self.source.name],
+                },
+            },
+        )
+
+    @freeze_time("2025-11-22T11:50:00Z")
+    def test_persistent(self):
+        """Test SAML persistent NameID."""
+        request = self.factory.post(
+            "/",
+            data={
+                "SAMLResponse": b64encode(
+                    load_fixture("fixtures/response_persistent.xml").encode()
+                ).decode()
+            },
+        )
+
+        parser = ResponseProcessor(self.source, request)
+        parser.parse()
+        sfm = parser.prepare_flow_manager()
+        self.assertEqual(
+            sfm.user_properties,
+            {
+                "email": "test001@example.org",
+                "eppn": "test001@example.org",
+                "urn:oid:1.3.6.1.4.1.25178.1.2.9": "example.org",
+                "uid": "test001",
+                "username": "LHPJHTQTRBOHWQRFZIYHL7PASE67UJVM",
+                "path": self.source.get_user_path(),
+                "attributes": {},
+            },
+        )
+
+    @freeze_time("2025-11-22T11:50:00Z")
+    def test_persistent_match_email(self):
+        """Test persistent NameID with email matching."""
+        request = self.factory.post(
+            "/",
+            data={
+                "SAMLResponse": b64encode(
+                    load_fixture("fixtures/response_persistent.xml").encode()
+                ).decode()
+            },
+        )
+
+        self.source.user_matching_mode = SourceUserMatchingModes.EMAIL_LINK
+        parser = ResponseProcessor(self.source, request)
+        parser.parse()
+        sfm = parser.prepare_flow_manager()
+        self.assertEqual(
+            sfm.user_properties,
+            {
+                "eppn": "test001@example.org",
+                "uid": "test001",
+                "urn:oid:1.3.6.1.4.1.25178.1.2.9": "example.org",
+                "email": "test001@example.org",
+                "username": "LHPJHTQTRBOHWQRFZIYHL7PASE67UJVM",
+                "path": self.source.get_user_path(),
+                "attributes": {},
+            },
+        )
+
+    @freeze_time("2025-11-22T11:50:00Z")
+    def test_persistent_match_eppn(self):
+        """Test persistent NameID with username matching."""
+        request = self.factory.post(
+            "/",
+            data={
+                "SAMLResponse": b64encode(
+                    load_fixture("fixtures/response_persistent.xml").encode()
+                ).decode()
+            },
+        )
+
+        self.source.user_matching_mode = SourceUserMatchingModes.USERNAME_LINK
+        parser = ResponseProcessor(self.source, request)
+        parser.parse()
+        sfm = parser.prepare_flow_manager()
+        self.assertEqual(sfm.identifier, "LHPJHTQTRBOHWQRFZIYHL7PASE67UJVM")
+        self.assertEqual(
+            sfm.user_properties,
+            {
+                "uid": "test001",
+                "email": "test001@example.org",
+                "urn:oid:1.3.6.1.4.1.25178.1.2.9": "example.org",
+                "eppn": "test001@example.org",
+                "username": "test001@example.org",
+                "path": self.source.get_user_path(),
+                "attributes": {},
+            },
+        )
         """Test verifying signature inside assertion via verification_kp_ring."""
         cert_pem = load_fixture("fixtures/signature_cert.pem")
 
