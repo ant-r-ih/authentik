@@ -36,7 +36,6 @@ SHIBBOLETH_ACS_URL = "https://sp.example.org:9443/source/saml/shibboleth-post/ac
 SHIBBOLETH_TRANSIENT_ACS_URL = "https://sp.example.org:10443/Shibboleth.sso/SAML2/POST"
 
 def _ring_add_keypairs(*, ring: CertificateKeyPairRing, keypairs: list[CertificateKeyPair]) -> None:
-    """Add keypairs to a ring in deterministic priority order."""
     for i, kp in enumerate(keypairs):
         CertificateKeyPairRingBinding.objects.create(ring=ring, keypair=kp, order=i)
 
@@ -764,7 +763,7 @@ class TestResponseProcessor(TestCase):
         with self.assertRaisesMessage(ValueError, "XML document contains a DOCTYPE declaration"):
             ResponseProcessor(self.source, request).parse()
 
-    @freeze_time("2022-10-14T14:16:40Z")
+    @freeze_time("2024-01-18T06:00:00Z")
     def test_verification_assertion_with_ring(self):
         """Test verifying signature inside assertion via verification_kp_ring."""
         cert_pem = load_fixture("fixtures/signature_cert.pem")
@@ -789,7 +788,7 @@ class TestResponseProcessor(TestCase):
 
         ResponseProcessor(self.source, request).parse()
 
-    @freeze_time("2014-07-17T01:02:18Z")
+    @freeze_time("2024-01-18T06:00:00Z")
     def test_verification_response_with_ring(self):
         """Test verifying signature inside response via verification_kp_ring."""
         cert_pem = load_fixture("fixtures/signature_cert.pem")
@@ -814,7 +813,7 @@ class TestResponseProcessor(TestCase):
 
         ResponseProcessor(self.source, request).parse()
 
-    @freeze_time("2014-07-17T01:02:18Z")
+    @freeze_time("2024-01-18T06:00:00Z")
     def test_verification_ring_try_order(self):
         """Ring should try certs in order until one verifies."""
         good = load_fixture("fixtures/signature_cert.pem")
@@ -840,7 +839,7 @@ class TestResponseProcessor(TestCase):
 
         ResponseProcessor(self.source, request).parse()
 
-    @freeze_time("2024-08-07T15:48:09.325Z")
+    @freeze_time("2024-08-07T15:48:10Z")
     def test_encrypted_correct_with_ring(self):
         """Decrypt using encryption_kp_ring (no encryption_kp)."""
         key_pem = load_fixture("fixtures/encrypted-key.pem")
@@ -868,7 +867,7 @@ class TestResponseProcessor(TestCase):
         with patch.object(SAMLSource, "build_full_url", return_value=KEYCLOAK_ACS_URL):
             ResponseProcessor(self.source, request).parse()
 
-    @freeze_time("2024-08-07T15:48:09.325Z")
+    @freeze_time("2024-08-07T15:48:10Z")
     def test_encrypted_ring_try_order(self):
         """Ring should try private keys in order until one decrypts."""
         bad = create_test_cert()  # has a private key but wrong one for this fixture

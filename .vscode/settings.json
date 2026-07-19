@@ -68,5 +68,6 @@
         "**/playwright-report/**": true,
         "**/website/**/build": true,
         "**/client-*": true
-    }
+    },
+    "makefile.configureOnOpen": false
 }

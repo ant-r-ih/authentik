@@ -20401,6 +20401,356 @@ paths:
           description: Bad request
         '403':
           $ref: '#/components/responses/GenericErrorResponse'
+  /providers/saml/{id}/service-providers/:
+    get:
+      operationId: providers_saml_service_providers_list
+      description: List nested service providers for this SAML provider.
+      parameters:
+      - in: query
+        name: acs_url
+        schema:
+          type: string
+      - in: query
+        name: assertion_valid_not_before
+        schema:
+          type: string
+      - in: query
+        name: assertion_valid_not_on_or_after
+        schema:
+          type: string
+      - in: query
+        name: audience
+        schema:
+          type: string
+      - in: query
+        name: authentication_flow
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: authn_context_class_ref_mapping
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: authorization_flow
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: backchannel_application
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: default_name_id_policy
+        schema:
+          $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+      - in: query
+        name: default_relay_state
+        schema:
+          type: string
+      - in: query
+        name: digest_algorithm
+        schema:
+          $ref: '#/components/schemas/DigestAlgorithmEnum'
+      - in: query
+        name: encryption_kp
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: encryption_kp_ring
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: entity_id
+        schema:
+          type: string
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this SAML Provider.
+        required: true
+      - in: query
+        name: invalidation_flow
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: is_backchannel
+        schema:
+          type: boolean
+      - in: query
+        name: issuer_override
+        schema:
+          type: string
+      - in: query
+        name: logout_method
+        schema:
+          allOf:
+          - $ref: '#/components/schemas/SAMLLogoutMethods'
+          description: |+
+            Method to use for logout. Front-channel iframe loads all logout URLs simultaneously in hidden iframes. Front-channel native uses your active browser tab to send post requests and redirect to providers. Back-channel sends logout requests directly from the server without user interaction (requires POST SLS binding).
+
+      - $ref: '#/components/parameters/QueryName'
+      - in: query
+        name: name_id_mapping
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/QueryPaginationOrdering'
+      - $ref: '#/components/parameters/QueryPaginationPage'
+      - $ref: '#/components/parameters/QueryPaginationPageSize'
+      - in: query
+        name: property_mappings
+        schema:
+          type: array
+          items:
+            type: string
+            format: uuid
+        explode: true
+        style: form
+      - $ref: '#/components/parameters/QuerySearch'
+      - in: query
+        name: session_valid_not_on_or_after
+        schema:
+          type: string
+      - in: query
+        name: sign_assertion
+        schema:
+          type: boolean
+      - in: query
+        name: sign_logout_request
+        schema:
+          type: boolean
+      - in: query
+        name: sign_logout_response
+        schema:
+          type: boolean
+      - in: query
+        name: sign_response
+        schema:
+          type: boolean
+      - in: query
+        name: signature_algorithm
+        schema:
+          $ref: '#/components/schemas/SignatureAlgorithmEnum'
+      - in: query
+        name: signing_kp
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: signing_kp_ring
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: sls_binding
+        schema:
+          allOf:
+          - $ref: '#/components/schemas/SAMLBindingsEnum'
+          description: |+
+            This determines how authentik sends the logout response back to the Service Provider.
+
+      - in: query
+        name: sls_url
+        schema:
+          type: string
+      - in: query
+        name: sp_binding
+        schema:
+          allOf:
+          - $ref: '#/components/schemas/SAMLBindingsEnum'
+          title: Service Provider Binding
+          description: |+
+            This determines how authentik sends the response back to the Service Provider.
+
+      - in: query
+        name: verification_kp
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: verification_kp_ring
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSAMLSPList'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/saml/{id}/service-providers/{sp_id}/:
+    get:
+      operationId: providers_saml_service_providers_retrieve
+      description: Retrieve, update, or delete one nested service provider.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this SAML Provider.
+        required: true
+      - in: path
+        name: sp_id
+        schema:
+          type: string
+          pattern: ^\d+|[0-9a-fA-F-]{36}$
+        required: true
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSP'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+    patch:
+      operationId: providers_saml_service_providers_partial_update
+      description: Retrieve, update, or delete one nested service provider.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this SAML Provider.
+        required: true
+      - in: path
+        name: sp_id
+        schema:
+          type: string
+          pattern: ^\d+|[0-9a-fA-F-]{36}$
+        required: true
+      tags:
+      - providers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSAMLSPRequest'
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSP'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+    delete:
+      operationId: providers_saml_service_providers_destroy
+      description: Retrieve, update, or delete one nested service provider.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this SAML Provider.
+        required: true
+      - in: path
+        name: sp_id
+        schema:
+          type: string
+          pattern: ^\d+|[0-9a-fA-F-]{36}$
+        required: true
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '204':
+          description: No response body
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/saml/{id}/service-providers/apply/:
+    post:
+      operationId: providers_saml_service_providers_apply_create
+      description: Apply SP metadata reconciliation results.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this SAML Provider.
+        required: true
+      tags:
+      - providers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SAMLSPApplyRequest'
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSPApplyResponse'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/saml/{id}/service-providers/preview/:
+    post:
+      operationId: providers_saml_service_providers_preview_create
+      description: Preview SP metadata reconciliation results.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this SAML Provider.
+        required: true
+      tags:
+      - providers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SAMLSPPreviewRequest'
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSPPreviewResponse'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
   /providers/saml/{id}/used_by/:
     get:
       operationId: providers_saml_used_by_list
@@ -21581,6 +21931,364 @@ paths:
           description: ''
         '400':
           description: Bad request
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/wsfed/{id}/service-providers/:
+    get:
+      operationId: providers_wsfed_service_providers_list
+      description: List nested service providers for this SAML provider.
+      parameters:
+      - in: query
+        name: acs_url
+        schema:
+          type: string
+      - in: query
+        name: assertion_valid_not_before
+        schema:
+          type: string
+      - in: query
+        name: assertion_valid_not_on_or_after
+        schema:
+          type: string
+      - in: query
+        name: audience
+        schema:
+          type: string
+      - in: query
+        name: authentication_flow
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: authn_context_class_ref_mapping
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: authorization_flow
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: backchannel_application
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: default_name_id_policy
+        schema:
+          $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+      - in: query
+        name: default_relay_state
+        schema:
+          type: string
+      - in: query
+        name: digest_algorithm
+        schema:
+          $ref: '#/components/schemas/DigestAlgorithmEnum'
+      - in: query
+        name: encryption_kp
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: encryption_kp_ring
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: entity_id
+        schema:
+          type: string
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this WS-Federation Provider.
+        required: true
+      - in: query
+        name: invalidation_flow
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: is_backchannel
+        schema:
+          type: boolean
+      - in: query
+        name: issuer_override
+        schema:
+          type: string
+      - in: query
+        name: logout_method
+        schema:
+          allOf:
+          - $ref: '#/components/schemas/SAMLLogoutMethods'
+          description: |+
+            Method to use for logout. Front-channel iframe loads all logout URLs simultaneously in hidden iframes. Front-channel native uses your active browser tab to send post requests and redirect to providers. Back-channel sends logout requests directly from the server without user interaction (requires POST SLS binding).
+
+      - $ref: '#/components/parameters/QueryName'
+      - in: query
+        name: name_id_mapping
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/QueryPaginationOrdering'
+      - $ref: '#/components/parameters/QueryPaginationPage'
+      - $ref: '#/components/parameters/QueryPaginationPageSize'
+      - in: query
+        name: property_mappings
+        schema:
+          type: array
+          items:
+            type: string
+            format: uuid
+        explode: true
+        style: form
+      - in: query
+        name: saml_version
+        schema:
+          allOf:
+          - $ref: '#/components/schemas/WSFedSAMLVersionEnum'
+          description: |+
+            SAML assertion version to issue in the security token. Microsoft Entra ID and classic ADFS-style relying parties typically require SAML 1.1.
+
+      - $ref: '#/components/parameters/QuerySearch'
+      - in: query
+        name: session_valid_not_on_or_after
+        schema:
+          type: string
+      - in: query
+        name: sign_assertion
+        schema:
+          type: boolean
+      - in: query
+        name: sign_logout_request
+        schema:
+          type: boolean
+      - in: query
+        name: sign_logout_response
+        schema:
+          type: boolean
+      - in: query
+        name: sign_response
+        schema:
+          type: boolean
+      - in: query
+        name: signature_algorithm
+        schema:
+          $ref: '#/components/schemas/SignatureAlgorithmEnum'
+      - in: query
+        name: signing_kp
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: signing_kp_ring
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: sls_binding
+        schema:
+          allOf:
+          - $ref: '#/components/schemas/SAMLBindingsEnum'
+          description: |+
+            This determines how authentik sends the logout response back to the Service Provider.
+
+      - in: query
+        name: sls_url
+        schema:
+          type: string
+      - in: query
+        name: sp_binding
+        schema:
+          allOf:
+          - $ref: '#/components/schemas/SAMLBindingsEnum'
+          title: Service Provider Binding
+          description: |+
+            This determines how authentik sends the response back to the Service Provider.
+
+      - in: query
+        name: verification_kp
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: verification_kp_ring
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSAMLSPList'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/wsfed/{id}/service-providers/{sp_id}/:
+    get:
+      operationId: providers_wsfed_service_providers_retrieve
+      description: Retrieve, update, or delete one nested service provider.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this WS-Federation Provider.
+        required: true
+      - in: path
+        name: sp_id
+        schema:
+          type: string
+          pattern: ^\d+|[0-9a-fA-F-]{36}$
+        required: true
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSP'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+    patch:
+      operationId: providers_wsfed_service_providers_partial_update
+      description: Retrieve, update, or delete one nested service provider.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this WS-Federation Provider.
+        required: true
+      - in: path
+        name: sp_id
+        schema:
+          type: string
+          pattern: ^\d+|[0-9a-fA-F-]{36}$
+        required: true
+      tags:
+      - providers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSAMLSPRequest'
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSP'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+    delete:
+      operationId: providers_wsfed_service_providers_destroy
+      description: Retrieve, update, or delete one nested service provider.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this WS-Federation Provider.
+        required: true
+      - in: path
+        name: sp_id
+        schema:
+          type: string
+          pattern: ^\d+|[0-9a-fA-F-]{36}$
+        required: true
+      tags:
+      - providers
+      security:
+      - authentik: []
+      responses:
+        '204':
+          description: No response body
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/wsfed/{id}/service-providers/apply/:
+    post:
+      operationId: providers_wsfed_service_providers_apply_create
+      description: Apply SP metadata reconciliation results.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this WS-Federation Provider.
+        required: true
+      tags:
+      - providers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SAMLSPApplyRequest'
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSPApplyResponse'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /providers/wsfed/{id}/service-providers/preview/:
+    post:
+      operationId: providers_wsfed_service_providers_preview_create
+      description: Preview SP metadata reconciliation results.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this WS-Federation Provider.
+        required: true
+      tags:
+      - providers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SAMLSPPreviewRequest'
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLSPPreviewResponse'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
         '403':
           $ref: '#/components/responses/GenericErrorResponse'
   /providers/wsfed/{id}/used_by/:
@@ -26588,6 +27296,324 @@ paths:
       responses:
         '204':
           description: No response body
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /sources/saml/{slug}/identity-providers/:
+    get:
+      operationId: sources_saml_identity_providers_list
+      description: List nested identity providers for this SAML source.
+      parameters:
+      - in: query
+        name: allow_idp_initiated
+        schema:
+          type: boolean
+      - in: query
+        name: authentication_flow
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: binding_type
+        schema:
+          $ref: '#/components/schemas/BindingTypeEnum'
+      - in: query
+        name: digest_algorithm
+        schema:
+          $ref: '#/components/schemas/DigestAlgorithmEnum'
+      - in: query
+        name: enabled
+        schema:
+          type: boolean
+      - in: query
+        name: encryption_kp
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: encryption_kp_ring
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: enrollment_flow
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: entity_id
+        schema:
+          type: string
+      - in: query
+        name: force_authn
+        schema:
+          type: boolean
+      - in: query
+        name: issuer_override
+        schema:
+          type: string
+      - in: query
+        name: managed
+        schema:
+          type: string
+      - $ref: '#/components/parameters/QueryName'
+      - in: query
+        name: name_id_policy
+        schema:
+          allOf:
+          - $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+          description: |+
+            NameID Policy sent to the IdP. Can be unset, in which case no Policy is sent.
+
+      - $ref: '#/components/parameters/QueryPaginationOrdering'
+      - $ref: '#/components/parameters/QueryPaginationPage'
+      - $ref: '#/components/parameters/QueryPaginationPageSize'
+      - in: query
+        name: pbm_uuid
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: policy_engine_mode
+        schema:
+          $ref: '#/components/schemas/PolicyEngineMode'
+      - in: query
+        name: pre_authentication_flow
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/QuerySearch'
+      - in: query
+        name: signature_algorithm
+        schema:
+          $ref: '#/components/schemas/SignatureAlgorithmEnum'
+      - in: query
+        name: signed_assertion
+        schema:
+          type: boolean
+      - in: query
+        name: signed_response
+        schema:
+          type: boolean
+      - in: query
+        name: signing_kp
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: signing_kp_ring
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: slo_url
+        schema:
+          type: string
+      - in: path
+        name: slug
+        schema:
+          type: string
+          description: Internal source name, used in URLs.
+        required: true
+      - in: query
+        name: slug
+        schema:
+          type: string
+      - in: query
+        name: sso_url
+        schema:
+          type: string
+      - in: query
+        name: temporary_user_delete_after
+        schema:
+          type: string
+      - in: query
+        name: user_matching_mode
+        schema:
+          allOf:
+          - $ref: '#/components/schemas/UserMatchingModeEnum'
+          description: |+
+            How the source determines if an existing user should be authenticated or a new user enrolled.
+
+      - in: query
+        name: verification_kp
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: verification_kp_ring
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - sources
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSAMLIDPList'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /sources/saml/{slug}/identity-providers/{idp_id}/:
+    get:
+      operationId: sources_saml_identity_providers_retrieve
+      description: Retrieve, update, or delete one nested identity provider.
+      parameters:
+      - in: path
+        name: idp_id
+        schema:
+          type: string
+          pattern: ^\d+|[0-9a-fA-F-]{36}$
+        required: true
+      - in: path
+        name: slug
+        schema:
+          type: string
+          description: Internal source name, used in URLs.
+        required: true
+      tags:
+      - sources
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLIDP'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+    patch:
+      operationId: sources_saml_identity_providers_partial_update
+      description: Retrieve, update, or delete one nested identity provider.
+      parameters:
+      - in: path
+        name: idp_id
+        schema:
+          type: string
+          pattern: ^\d+|[0-9a-fA-F-]{36}$
+        required: true
+      - in: path
+        name: slug
+        schema:
+          type: string
+          description: Internal source name, used in URLs.
+        required: true
+      tags:
+      - sources
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSAMLIDPRequest'
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLIDP'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+    delete:
+      operationId: sources_saml_identity_providers_destroy
+      description: Retrieve, update, or delete one nested identity provider.
+      parameters:
+      - in: path
+        name: idp_id
+        schema:
+          type: string
+          pattern: ^\d+|[0-9a-fA-F-]{36}$
+        required: true
+      - in: path
+        name: slug
+        schema:
+          type: string
+          description: Internal source name, used in URLs.
+        required: true
+      tags:
+      - sources
+      security:
+      - authentik: []
+      responses:
+        '204':
+          description: No response body
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /sources/saml/{slug}/identity-providers/apply/:
+    post:
+      operationId: sources_saml_identity_providers_apply_create
+      description: Apply IdP metadata reconciliation results.
+      parameters:
+      - in: path
+        name: slug
+        schema:
+          type: string
+          description: Internal source name, used in URLs.
+        required: true
+      tags:
+      - sources
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SAMLIDPApplyRequest'
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLIDPApplyResponse'
+          description: ''
+        '400':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '403':
+          $ref: '#/components/responses/GenericErrorResponse'
+  /sources/saml/{slug}/identity-providers/preview/:
+    post:
+      operationId: sources_saml_identity_providers_preview_create
+      description: Preview IdP metadata reconciliation results.
+      parameters:
+      - in: path
+        name: slug
+        schema:
+          type: string
+          description: Internal source name, used in URLs.
+        required: true
+      tags:
+      - sources
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SAMLIDPPreviewRequest'
+      security:
+      - authentik: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SAMLIDPPreviewResponse'
+          description: ''
         '400':
           $ref: '#/components/responses/ValidationErrorResponse'
         '403':
@@ -36034,6 +37060,11 @@ components:
             flow should not require authentication since the user's session is deleted.
       required:
       - name
+    AcsBindingEnum:
+      enum:
+      - post
+      - redirect
+      type: string
     Agent:
       type: object
       description: |-
@@ -36797,6 +37828,11 @@ components:
       required:
       - name
       - slug
+    ApplyPolicyEnum:
+      enum:
+      - force
+      - if_not_deviated
+      type: string
     AuthTypeEnum:
       enum:
       - basic
@@ -43843,6 +44879,11 @@ components:
       required:
       - name
       - role
+    InputModeEnum:
+      enum:
+      - file
+      - entities
+      type: string
     InstallID:
       type: object
       properties:
@@ -46177,6 +47218,15 @@ components:
       - mode
       - name
       - user_attribute
+    NameIdPolicyF88Enum:
+      enum:
+      - urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress
+      - urn:oasis:names:tc:SAML:2.0:nameid-format:persistent
+      - urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName
+      - urn:oasis:names:tc:SAML:2.0:nameid-format:WindowsDomainQualifiedName
+      - urn:oasis:names:tc:SAML:2.0:nameid-format:transient
+      - urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified
+      type: string
     NativeLogoutChallenge:
       type: object
       description: Challenge for native browser logout
@@ -49523,6 +50573,21 @@ components:
       - autocomplete
       - pagination
       - results
+    PaginatedSAMLIDPList:
+      type: object
+      properties:
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SAMLIDP'
+        autocomplete:
+          $ref: '#/components/schemas/Autocomplete'
+      required:
+      - autocomplete
+      - pagination
+      - results
     PaginatedSAMLPropertyMappingList:
       type: object
       properties:
@@ -49547,6 +50612,21 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SAMLProvider'
+        autocomplete:
+          $ref: '#/components/schemas/Autocomplete'
+      required:
+      - autocomplete
+      - pagination
+      - results
+    PaginatedSAMLSPList:
+      type: object
+      properties:
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SAMLSP'
         autocomplete:
           $ref: '#/components/schemas/Autocomplete'
       required:
@@ -53760,6 +54840,86 @@ components:
         name:
           type: string
           minLength: 1
+    PatchedSAMLIDPRequest:
+      type: object
+      description: Serializer for nested SAML identity provider entities.
+      properties:
+        name:
+          type: string
+        entity_id:
+          type: string
+          minLength: 1
+          description: SAML EntityID (Issuer)
+        enabled:
+          type: boolean
+        sso_url:
+          type: string
+          minLength: 1
+          description: URL that the initial Login request is sent to.
+          format: uri
+        slo_url:
+          type: string
+          nullable: true
+          description: Optional URL if your IDP supports Single-Logout.
+          format: uri
+        allow_idp_initiated:
+          type: boolean
+        name_id_policy:
+          $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+        binding_type:
+          $ref: '#/components/schemas/BindingTypeEnum'
+        digest_algorithm:
+          $ref: '#/components/schemas/DigestAlgorithmEnum'
+        signature_algorithm:
+          $ref: '#/components/schemas/SignatureAlgorithmEnum'
+        signed_assertion:
+          type: boolean
+        signed_response:
+          type: boolean
+        verification_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Verification Certificate
+        signing_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Signing Keypair
+        encryption_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Encryption Keypair
+        verification_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        signing_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        encryption_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        verification_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        signing_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        encryption_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        freeze_verification_kp:
+          type: boolean
+        freeze_signing_kp:
+          type: boolean
+        freeze_encryption_kp:
+          type: boolean
+        local_override_set:
+          type: boolean
     PatchedSAMLPropertyMappingRequest:
       type: object
       description: SAMLPropertyMapping Serializer
@@ -53928,6 +55088,88 @@ components:
           description: Default relay_state value for IDP-initiated logins
         default_name_id_policy:
           $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+    PatchedSAMLSPRequest:
+      type: object
+      description: Serializer for nested SAML service provider entities.
+      properties:
+        name:
+          type: string
+        entity_id:
+          type: string
+          minLength: 1
+          description: SAML EntityID (Issuer)
+        enabled:
+          type: boolean
+        acs_url:
+          type: string
+          minLength: 1
+          format: uri
+        sp_binding:
+          $ref: '#/components/schemas/SAMLBindingsEnum'
+        sls_url:
+          type: string
+        sls_binding:
+          $ref: '#/components/schemas/SAMLBindingsEnum'
+        authn_requests_signed:
+          type: boolean
+        want_assertions_signed:
+          type: boolean
+        name_id_policy:
+          $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+        verification_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Verification Certificate
+        signing_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Signing Keypair
+        encryption_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Encryption Keypair
+        verification_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        signing_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        encryption_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        verification_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        signing_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        encryption_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        freeze_verification_kp:
+          type: boolean
+        freeze_signing_kp:
+          type: boolean
+        freeze_encryption_kp:
+          type: boolean
+        local_override_set:
+          type: boolean
+        property_mappings_override:
+          type: boolean
+          description: If enabled, use this SAMLSP's property mappings instead of
+            provider mappings.
+        property_mappings:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Per-SP property mappings.
     PatchedSAMLSourcePropertyMappingRequest:
       type: object
       description: SAMLSourcePropertyMapping Serializer
@@ -57493,6 +58735,374 @@ components:
       - redirect
       - post
       type: string
+    SAMLIDP:
+      type: object
+      description: Serializer for nested SAML identity provider entities.
+      properties:
+        pk:
+          type: integer
+          readOnly: true
+          title: ID
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+        entity_id:
+          type: string
+          description: SAML EntityID (Issuer)
+        enabled:
+          type: boolean
+        sso_url:
+          type: string
+          description: URL that the initial Login request is sent to.
+          format: uri
+        slo_url:
+          type: string
+          nullable: true
+          description: Optional URL if your IDP supports Single-Logout.
+          format: uri
+        allow_idp_initiated:
+          type: boolean
+        name_id_policy:
+          $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+        binding_type:
+          $ref: '#/components/schemas/BindingTypeEnum'
+        digest_algorithm:
+          $ref: '#/components/schemas/DigestAlgorithmEnum'
+        signature_algorithm:
+          $ref: '#/components/schemas/SignatureAlgorithmEnum'
+        signed_assertion:
+          type: boolean
+        signed_response:
+          type: boolean
+        verification_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Verification Certificate
+        signing_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Signing Keypair
+        encryption_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Encryption Keypair
+        verification_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        signing_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        encryption_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        verification_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        signing_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        encryption_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        freeze_verification_kp:
+          type: boolean
+        freeze_signing_kp:
+          type: boolean
+        freeze_encryption_kp:
+          type: boolean
+        local_override_set:
+          type: boolean
+        metadata_snapshot:
+          type: object
+          additionalProperties: {}
+          readOnly: true
+        metadata_last_import:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        metadata_hash:
+          type: string
+          readOnly: true
+        created:
+          type: string
+          format: date-time
+          readOnly: true
+        last_updated:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created
+      - entity_id
+      - last_updated
+      - metadata_hash
+      - metadata_last_import
+      - metadata_snapshot
+      - pk
+      - sso_url
+      - uuid
+    SAMLIDPApplyRequest:
+      type: object
+      description: Apply request for source identity-providers.
+      properties:
+        input_mode:
+          allOf:
+          - $ref: '#/components/schemas/InputModeEnum'
+          default: file
+        file_ref:
+          type: string
+          minLength: 1
+        signing_certificate:
+          type: string
+          format: uuid
+          nullable: true
+        entity_ids:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/SAMLIDPDTORequest'
+        apply_policy:
+          allOf:
+          - $ref: '#/components/schemas/ApplyPolicyEnum'
+          default: if_not_deviated
+        create_missing_rings:
+          type: boolean
+          default: true
+    SAMLIDPApplyResponse:
+      type: object
+      description: Apply response payload for IdP entities.
+      properties:
+        count:
+          type: integer
+        summary:
+          $ref: '#/components/schemas/SAMLIDPApplySummary'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SAMLIDPApplyResult'
+      required:
+      - count
+      - results
+      - summary
+    SAMLIDPApplyResult:
+      type: object
+      description: Apply result payload for one IdP entity.
+      properties:
+        entity_id:
+          type: string
+        status:
+          type: string
+        reason:
+          type: string
+          nullable: true
+        object_pk:
+          type: integer
+          nullable: true
+        compare:
+          allOf:
+          - $ref: '#/components/schemas/SAMLIDPCompare'
+          nullable: true
+      required:
+      - entity_id
+      - status
+    SAMLIDPApplySummary:
+      type: object
+      description: Apply summary payload for IdP entities.
+      properties:
+        created:
+          type: integer
+        updated:
+          type: integer
+        skipped:
+          type: integer
+      required:
+      - created
+      - skipped
+      - updated
+    SAMLIDPCompare:
+      type: object
+      description: Compare result for one IdP entity.
+      properties:
+        entity_id:
+          type: string
+        exists:
+          type: boolean
+        runtime_changed:
+          type: boolean
+        cert_changed:
+          type: boolean
+        runtime_deviated:
+          type: boolean
+        cert_deviated:
+          type: boolean
+        runtime_diff_fields:
+          type: array
+          items:
+            type: string
+        cert_diff_fields:
+          type: array
+          items:
+            type: string
+        runtime_locked:
+          type: boolean
+        cert_locked:
+          type: boolean
+        target_pk:
+          type: integer
+          nullable: true
+      required:
+      - cert_changed
+      - cert_deviated
+      - cert_locked
+      - entity_id
+      - exists
+      - runtime_changed
+      - runtime_deviated
+      - runtime_locked
+    SAMLIDPDTO:
+      type: object
+      description: Serializer for IdP DTO payloads used by preview/apply.
+      properties:
+        entity_id:
+          type: string
+        display_name:
+          type: string
+          nullable: true
+        sso_binding:
+          $ref: '#/components/schemas/SsoBindingEnum'
+        sso_location:
+          type: string
+        want_authn_requests_signed:
+          type: boolean
+          default: false
+        name_id_policy:
+          allOf:
+          - $ref: '#/components/schemas/NameIdPolicyF88Enum'
+          default: urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified
+        signing_cert_pems:
+          type: array
+          items:
+            type: string
+        encryption_cert_pems:
+          type: array
+          items:
+            type: string
+        slo_binding:
+          allOf:
+          - $ref: '#/components/schemas/SloBindingEnum'
+          nullable: true
+        slo_location:
+          type: string
+          nullable: true
+      required:
+      - entity_id
+      - sso_binding
+      - sso_location
+    SAMLIDPDTORequest:
+      type: object
+      description: Serializer for IdP DTO payloads used by preview/apply.
+      properties:
+        entity_id:
+          type: string
+          minLength: 1
+        display_name:
+          type: string
+          nullable: true
+        sso_binding:
+          $ref: '#/components/schemas/SsoBindingEnum'
+        sso_location:
+          type: string
+          minLength: 1
+        want_authn_requests_signed:
+          type: boolean
+          default: false
+        name_id_policy:
+          allOf:
+          - $ref: '#/components/schemas/NameIdPolicyF88Enum'
+          default: urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified
+        signing_cert_pems:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        encryption_cert_pems:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        slo_binding:
+          allOf:
+          - $ref: '#/components/schemas/SloBindingEnum'
+          nullable: true
+        slo_location:
+          type: string
+          nullable: true
+      required:
+      - entity_id
+      - sso_binding
+      - sso_location
+    SAMLIDPPreviewItem:
+      type: object
+      description: Preview payload item for one IdP entity.
+      properties:
+        metadata:
+          $ref: '#/components/schemas/SAMLIDPDTO'
+        compare:
+          $ref: '#/components/schemas/SAMLIDPCompare'
+      required:
+      - compare
+      - metadata
+    SAMLIDPPreviewRequest:
+      type: object
+      description: Preview request for source identity-providers.
+      properties:
+        input_mode:
+          allOf:
+          - $ref: '#/components/schemas/InputModeEnum'
+          default: file
+        file_ref:
+          type: string
+          minLength: 1
+        signing_certificate:
+          type: string
+          format: uuid
+          nullable: true
+        entity_ids:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/SAMLIDPDTORequest'
+    SAMLIDPPreviewResponse:
+      type: object
+      description: Preview response payload for IdP entities.
+      properties:
+        count:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SAMLIDPPreviewItem'
+      required:
+      - count
+      - results
     SAMLLogoutMethods:
       enum:
       - frontchannel_iframe
@@ -58015,6 +59625,382 @@ components:
       - authorization_flow
       - invalidation_flow
       - name
+    SAMLSP:
+      type: object
+      description: Serializer for nested SAML service provider entities.
+      properties:
+        pk:
+          type: integer
+          readOnly: true
+          title: ID
+        uuid:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+        entity_id:
+          type: string
+          description: SAML EntityID (Issuer)
+        enabled:
+          type: boolean
+        acs_url:
+          type: string
+          format: uri
+        sp_binding:
+          $ref: '#/components/schemas/SAMLBindingsEnum'
+        sls_url:
+          type: string
+        sls_binding:
+          $ref: '#/components/schemas/SAMLBindingsEnum'
+        authn_requests_signed:
+          type: boolean
+        want_assertions_signed:
+          type: boolean
+        name_id_policy:
+          $ref: '#/components/schemas/SAMLNameIDPolicyEnum'
+        verification_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Verification Certificate
+        signing_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Signing Keypair
+        encryption_kp:
+          type: string
+          format: uuid
+          nullable: true
+          title: Encryption Keypair
+        verification_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        signing_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        encryption_kp_ring:
+          type: string
+          format: uuid
+          nullable: true
+        verification_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        signing_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        encryption_kp_override:
+          type: boolean
+          description: Use local key; otherwise inherit from owner.
+        freeze_verification_kp:
+          type: boolean
+        freeze_signing_kp:
+          type: boolean
+        freeze_encryption_kp:
+          type: boolean
+        local_override_set:
+          type: boolean
+        property_mappings_override:
+          type: boolean
+          description: If enabled, use this SAMLSP's property mappings instead of
+            provider mappings.
+        property_mappings:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Per-SP property mappings.
+        metadata_snapshot:
+          type: object
+          additionalProperties: {}
+          readOnly: true
+        metadata_last_import:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        metadata_hash:
+          type: string
+          readOnly: true
+        created:
+          type: string
+          format: date-time
+          readOnly: true
+        last_updated:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - acs_url
+      - created
+      - entity_id
+      - last_updated
+      - metadata_hash
+      - metadata_last_import
+      - metadata_snapshot
+      - pk
+      - uuid
+    SAMLSPApplyRequest:
+      type: object
+      description: Apply request for provider service-providers.
+      properties:
+        input_mode:
+          allOf:
+          - $ref: '#/components/schemas/InputModeEnum'
+          default: file
+        file_ref:
+          type: string
+          minLength: 1
+        signing_certificate:
+          type: string
+          format: uuid
+          nullable: true
+        entity_ids:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/SAMLSPDTORequest'
+        apply_policy:
+          allOf:
+          - $ref: '#/components/schemas/ApplyPolicyEnum'
+          default: if_not_deviated
+        create_missing_rings:
+          type: boolean
+          default: true
+    SAMLSPApplyResponse:
+      type: object
+      description: Apply response payload for SP entities.
+      properties:
+        count:
+          type: integer
+        summary:
+          $ref: '#/components/schemas/SAMLSPApplySummary'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SAMLSPApplyResult'
+      required:
+      - count
+      - results
+      - summary
+    SAMLSPApplyResult:
+      type: object
+      description: Apply result payload for one SP entity.
+      properties:
+        entity_id:
+          type: string
+        status:
+          type: string
+        reason:
+          type: string
+          nullable: true
+        object_pk:
+          type: integer
+          nullable: true
+        compare:
+          allOf:
+          - $ref: '#/components/schemas/SAMLSPCompare'
+          nullable: true
+      required:
+      - entity_id
+      - status
+    SAMLSPApplySummary:
+      type: object
+      description: Apply summary payload for SP entities.
+      properties:
+        created:
+          type: integer
+        updated:
+          type: integer
+        skipped:
+          type: integer
+      required:
+      - created
+      - skipped
+      - updated
+    SAMLSPCompare:
+      type: object
+      description: Compare result for one SP entity.
+      properties:
+        entity_id:
+          type: string
+        exists:
+          type: boolean
+        runtime_changed:
+          type: boolean
+        cert_changed:
+          type: boolean
+        runtime_deviated:
+          type: boolean
+        cert_deviated:
+          type: boolean
+        runtime_diff_fields:
+          type: array
+          items:
+            type: string
+        cert_diff_fields:
+          type: array
+          items:
+            type: string
+        runtime_locked:
+          type: boolean
+        cert_locked:
+          type: boolean
+        target_pk:
+          type: integer
+          nullable: true
+      required:
+      - cert_changed
+      - cert_deviated
+      - cert_locked
+      - entity_id
+      - exists
+      - runtime_changed
+      - runtime_deviated
+      - runtime_locked
+    SAMLSPDTO:
+      type: object
+      description: Serializer for SP DTO payloads used by preview/apply.
+      properties:
+        entity_id:
+          type: string
+        display_name:
+          type: string
+          nullable: true
+        acs_binding:
+          $ref: '#/components/schemas/AcsBindingEnum'
+        acs_location:
+          type: string
+        auth_n_request_signed:
+          type: boolean
+          default: false
+        assertion_signed:
+          type: boolean
+          default: false
+        name_id_policy:
+          allOf:
+          - $ref: '#/components/schemas/NameIdPolicyF88Enum'
+          default: urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified
+        sls_binding:
+          allOf:
+          - $ref: '#/components/schemas/SlsBinding557Enum'
+          nullable: true
+        sls_location:
+          type: string
+          nullable: true
+        signing_cert_pems:
+          type: array
+          items:
+            type: string
+        encryption_cert_pems:
+          type: array
+          items:
+            type: string
+      required:
+      - acs_binding
+      - acs_location
+      - entity_id
+    SAMLSPDTORequest:
+      type: object
+      description: Serializer for SP DTO payloads used by preview/apply.
+      properties:
+        entity_id:
+          type: string
+          minLength: 1
+        display_name:
+          type: string
+          nullable: true
+        acs_binding:
+          $ref: '#/components/schemas/AcsBindingEnum'
+        acs_location:
+          type: string
+          minLength: 1
+        auth_n_request_signed:
+          type: boolean
+          default: false
+        assertion_signed:
+          type: boolean
+          default: false
+        name_id_policy:
+          allOf:
+          - $ref: '#/components/schemas/NameIdPolicyF88Enum'
+          default: urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified
+        sls_binding:
+          allOf:
+          - $ref: '#/components/schemas/SlsBinding557Enum'
+          nullable: true
+        sls_location:
+          type: string
+          nullable: true
+        signing_cert_pems:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        encryption_cert_pems:
+          type: array
+          items:
+            type: string
+            minLength: 1
+      required:
+      - acs_binding
+      - acs_location
+      - entity_id
+    SAMLSPPreviewItem:
+      type: object
+      description: Preview payload item for one SP entity.
+      properties:
+        metadata:
+          $ref: '#/components/schemas/SAMLSPDTO'
+        compare:
+          $ref: '#/components/schemas/SAMLSPCompare'
+      required:
+      - compare
+      - metadata
+    SAMLSPPreviewRequest:
+      type: object
+      description: Preview request for provider service-providers.
+      properties:
+        input_mode:
+          allOf:
+          - $ref: '#/components/schemas/InputModeEnum'
+          default: file
+        file_ref:
+          type: string
+          minLength: 1
+        signing_certificate:
+          type: string
+          format: uuid
+          nullable: true
+        entity_ids:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/SAMLSPDTORequest'
+    SAMLSPPreviewResponse:
+      type: object
+      description: Preview response payload for SP entities.
+      properties:
+        count:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SAMLSPPreviewItem'
+      required:
+      - count
+      - results
     SAMLSource:
       type: object
       description: SAMLSource Serializer
@@ -59737,6 +61723,16 @@ components:
       - http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512
       - http://www.w3.org/2000/09/xmldsig#dsa-sha1
       type: string
+    SloBindingEnum:
+      enum:
+      - post
+      - redirect
+      type: string
+    SlsBinding557Enum:
+      enum:
+      - post
+      - redirect
+      type: string
     Software:
       type: object
       properties:
@@ -59987,6 +61983,11 @@ components:
       - request_token_url
       - urls_customizable
       - verbose_name
+    SsoBindingEnum:
+      enum:
+      - post
+      - redirect
+      type: string
     Stage:
       type: object
       description: Stage Serializer
@@ -61115,6 +63116,7 @@ components:
     UsageEnum:
       enum:
       - media
+      - saml_metadata
       type: string
     UsedBy:
       type: object
