@@ -318,6 +318,12 @@ class SAMLSource(Source):
             reverse(f"authentik_sources_saml:{view}", kwargs={"source_slug": self.slug})
         )
 
+    def get_idp(self, entity_id: str | None):
+        """Return enabled SAMLIDP for the given entity_id."""
+        if not entity_id or not self._is_pk_set():
+            return None
+        return self.identity_providers.filter(enabled=True, entity_id=entity_id).first()
+
     @property
     def icon_url(self) -> str:
         icon = super().icon_url

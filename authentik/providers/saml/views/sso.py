@@ -98,13 +98,17 @@ class SAMLSSOView(PolicyAccessView):
         except FlowNonApplicableException:
             raise Http404 from None
         plan.append_stage(in_memory_stage(SAMLFlowFinalView))
+        auth_n_request = self.plan_context.get(PLAN_CONTEXT_SAML_AUTH_N_REQUEST)
+        resolved_binding = self.provider.sp_binding
+        if auth_n_request and getattr(auth_n_request, "cfg", None):
+            resolved_binding = auth_n_request.cfg.sp_binding or self.provider.sp_binding
         return plan.to_redirect(
             request,
             self.provider.authorization_flow,
             next=self.get_resume_url(),
             allowed_silent_types=(
                 [SAMLFlowFinalView]
-                if self.provider.sp_binding in [SAMLBindings.REDIRECT] and not ContinuousLogin.get()
+                if resolved_binding in [SAMLBindings.REDIRECT] and not ContinuousLogin.get()
                 else []
             ),
         )

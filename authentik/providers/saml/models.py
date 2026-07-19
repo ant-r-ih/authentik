@@ -286,6 +286,12 @@ class SAMLProvider(Provider):
     def component(self) -> str:
         return "ak-provider-saml-form"
 
+    def get_sp(self, entity_id: str | None):
+        """Return enabled SAMLSP for the given entity_id."""
+        if not entity_id or not self._is_pk_set():
+            return None
+        return self.service_providers.filter(enabled=True, entity_id=entity_id).first()
+
     def __str__(self):
         return f"SAML Provider {self.name}"
 
@@ -373,3 +379,12 @@ class SAMLSession(InternallyManagedMixin, SerializerModel, ExpiringModel):
             models.Index(fields=["provider", "user"]),
             models.Index(fields=["session"]),
         ]
+
+
+from authentik.providers.saml import models_federation as federation_models  # noqa: E402
+
+SAMLMetadataBindKind = federation_models.SAMLMetadataBindKind
+SAMLMetadataFeed = federation_models.SAMLMetadataFeed
+SAMLMetadataBind = federation_models.SAMLMetadataBind
+SAMLSP = federation_models.SAMLSP
+SAMLIDP = federation_models.SAMLIDP

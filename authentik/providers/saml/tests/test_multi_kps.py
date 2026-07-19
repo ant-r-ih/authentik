@@ -14,6 +14,7 @@ from authentik.crypto.models import (
 from authentik.providers.saml.exceptions import CannotHandleAssertion
 from authentik.providers.saml.models import SAMLProvider
 from authentik.providers.saml.processors.authn_request_parser import AuthNRequestParser
+from authentik.providers.saml.resolve import build_sp_config
 from authentik.providers.saml.utils.keyring import candidate_cert_pems, pick_cert_pem
 from authentik.sources.saml.models import SAMLBindingTypes, SAMLSource
 from authentik.sources.saml.processors.request import RequestProcessor
@@ -151,3 +152,43 @@ class TestAuthNRequestMultiKey(TestCase):
                 b64encode(xml.encode()).decode(),
                 "test_state",
             )
+
+
+class TestSPOverrideNoneSemantics(TestCase):
+    """SP key override resolution semantics."""
+
+    def setUp(self):
+        self.provider = SAMLProvider.objects.create(
+            name="p-override-none",
+            authorization_flow=create_test_flow(),
+            invalidation_flow=create_test_flow(),
+            acs_url="https://default.example.org/acs",
+            verification_kp=create_test_cert(),
+            signing_kp=create_test_cert(),
+            encryption_kp=create_test_cert(),
+        )
+
+    def test_override_true_with_empty_local_keys_disables_parent_fallback(self):
+        """SP override=True with local None must not inherit owner keys."""
+        sp = self.provider.service_providers.create(
+            name="sp-local-none",
+            entity_id="https://sp.local.none/metadata",
+            enabled=True,
+            acs_url="https://sp.local.none/acs",
+            verification_kp_override=True,
+            signing_kp_override=True,
+            encryption_kp_override=True,
+            verification_kp=None,
+            signing_kp=None,
+            encryption_kp=None,
+            verification_kp_ring=None,
+            signing_kp_ring=None,
+            encryption_kp_ring=None,
+        )
+        cfg = build_sp_config(self.provider, sp)
+        self.assertIsNone(cfg.keys.verification_kp)
+        self.assertIsNone(cfg.keys.verification_kp_ring)
+        self.assertIsNone(cfg.keys.signing_kp)
+        self.assertIsNone(cfg.keys.signing_kp_ring)
+        self.assertIsNone(cfg.keys.encryption_kp)
+        self.assertIsNone(cfg.keys.encryption_kp_ring)

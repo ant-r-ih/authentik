@@ -2,6 +2,7 @@ import "#admin/policies/BoundPoliciesList";
 import "#admin/rbac/ak-rbac-object-permission-page";
 import "#admin/sources/saml/SAMLSourceForm";
 import "#admin/sources/saml/SAMLSourceApplyForm";
+import "#admin/sources/saml/SAMLSourceIDPTab";
 import "#admin/events/ObjectChangelog";
 import "#elements/CodeMirror";
 import "#elements/Tabs";
@@ -146,7 +147,7 @@ export class SAMLSourceViewPage extends AKElement {
                                     >
                                     <ak-source-saml-apply-metadata-form
                                         slot="form"
-                                        .sourceId=${this.source.pk || 0}
+                                        .sourceId=${String(this.source.pk || "")}
                                         .sourceName=${this.source.name || ""}
                                     >
                                     </ak-source-saml-apply-metadata-form>
@@ -154,6 +155,25 @@ export class SAMLSourceViewPage extends AKElement {
                                         ${msg("Apply latest IdP metadata")}
                                     </button>
                                 </ak-forms-modal>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div
+                    role="tabpanel"
+                    tabindex="0"
+                    slot="page-identity-providers"
+                    id="page-identity-providers"
+                    aria-label="${msg("Identity Providers")}"
+                    class="pf-c-page__main-section pf-m-no-padding-mobile"
+                >
+                    <div class="pf-l-grid pf-m-gutter">
+                        <div class="pf-c-card pf-l-grid__item pf-m-12-col">
+                            <div class="pf-c-card__title">${msg("Identity Providers")}</div>
+                            <div class="pf-c-card__body">
+                                <ak-source-saml-idp-tab
+                                    .parent=${this.source}
+                                ></ak-source-saml-idp-tab>
                             </div>
                         </div>
                     </div>

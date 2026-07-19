@@ -13,7 +13,8 @@ from authentik.crypto.builder import PrivateKeyAlg
 from authentik.flows.models import FlowDesignation
 from authentik.lib.generators import generate_id
 from authentik.lib.tests.utils import load_fixture
-from authentik.providers.saml.models import SAMLPropertyMapping, SAMLProvider
+from authentik.providers.saml.models import SAMLSP, SAMLPropertyMapping, SAMLProvider
+from authentik.sources.saml.models import SAMLNameIDPolicy
 
 
 class TestSAMLProviderAPI(APITestCase):
@@ -287,3 +288,119 @@ class TestSAMLProviderAPI(APITestCase):
             ]["Value"],
             [self.user.username],
         )
+
+    def test_service_providers_preview_entities(self):
+        """Test preview endpoint for service providers with DTO payload."""
+        provider = SAMLProvider.objects.create(
+            name=generate_id(),
+            authorization_flow=create_test_flow(),
+        )
+        existing = SAMLSP.objects.create(
+            parent=provider,
+            name=generate_id(),
+            entity_id="https://sp-existing.example.org/metadata",
+            enabled=True,
+            acs_url="https://sp-existing.example.org/acs",
+            sp_binding="post",
+            sls_url="",
+            sls_binding="post",
+        )
+        response = self.client.post(
+            reverse(
+                "authentik_api:samlprovider-service-providers-preview",
+                kwargs={"pk": provider.pk},
+            ),
+            data={
+                "input_mode": "entities",
+                "entities": [
+                    {
+                        "entity_id": existing.entity_id,
+                        "display_name": "Existing SP Display",
+                        "acs_binding": "post",
+                        "acs_location": existing.acs_url,
+                        "auth_n_request_signed": False,
+                        "assertion_signed": False,
+                        "name_id_policy": SAMLNameIDPolicy.UNSPECIFIED,
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 1)
+        self.assertEqual(response.json()["results"][0]["compare"]["entity_id"], existing.entity_id)
+        self.assertEqual(
+            response.json()["results"][0]["metadata"]["display_name"],
+            "Existing SP Display",
+        )
+
+    def test_service_providers_apply_entities(self):
+        """Test apply endpoint for service providers with DTO payload."""
+        provider = SAMLProvider.objects.create(
+            name=generate_id(),
+            authorization_flow=create_test_flow(),
+        )
+        response = self.client.post(
+            reverse(
+                "authentik_api:samlprovider-service-providers-apply",
+                kwargs={"pk": provider.pk},
+            ),
+            data={
+                "input_mode": "entities",
+                "entities": [
+                    {
+                        "entity_id": "https://sp-new.example.org/metadata",
+                        "display_name": "New SP Display",
+                        "acs_binding": "post",
+                        "acs_location": "https://sp-new.example.org/acs",
+                        "auth_n_request_signed": False,
+                        "assertion_signed": False,
+                        "name_id_policy": SAMLNameIDPolicy.UNSPECIFIED,
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["summary"]["created"], 1)
+        created = provider.service_providers.get(entity_id="https://sp-new.example.org/metadata")
+        self.assertEqual(created.name, "New SP Display")
+        self.assertEqual(created.acs_url, "https://sp-new.example.org/acs")
+
+    def test_service_provider_nested_crud(self):
+        """Test nested list/detail/patch/delete endpoints for SAMLSP."""
+        provider = SAMLProvider.objects.create(
+            name=generate_id(),
+            authorization_flow=create_test_flow(),
+        )
+        sp = SAMLSP.objects.create(
+            parent=provider,
+            name="before",
+            entity_id="https://sp-crud.example.org/metadata",
+            enabled=True,
+            acs_url="https://sp-crud.example.org/acs",
+            sp_binding="post",
+            sls_url="",
+            sls_binding="post",
+        )
+        list_response = self.client.get(
+            reverse("authentik_api:samlprovider-service-providers", kwargs={"pk": provider.pk}),
+        )
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.json()["results"]), 1)
+
+        detail_url = reverse(
+            "authentik_api:samlprovider-service-provider",
+            kwargs={"pk": provider.pk, "sp_id": sp.pk},
+        )
+        detail_response = self.client.get(detail_url)
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["entity_id"], sp.entity_id)
+
+        patch_response = self.client.patch(detail_url, data={"name": "after"}, format="json")
+        self.assertEqual(patch_response.status_code, 200)
+        self.assertEqual(patch_response.json()["name"], "after")
+
+        delete_response = self.client.delete(detail_url)
+        self.assertEqual(delete_response.status_code, 204)
+        self.assertFalse(provider.service_providers.filter(pk=sp.pk).exists())

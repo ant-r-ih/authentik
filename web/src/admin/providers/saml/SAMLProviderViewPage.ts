@@ -1,4 +1,5 @@
 import "#admin/providers/RelatedApplicationButton";
+import "#admin/providers/saml/SAMLProviderSPTab";
 import "#admin/providers/saml/SAMLProviderForm";
 import "#admin/rbac/ak-rbac-object-permission-page";
 import "#admin/providers/saml/SAMLProviderApplyForm";
@@ -265,6 +266,15 @@ export class SAMLProviderViewPage extends AKElement {
                 <div
                     role="tabpanel"
                     tabindex="0"
+                    slot="page-service-providers"
+                    id="page-service-providers"
+                    aria-label="${msg("Service Providers")}"
+                >
+                    ${this.renderTabServiceProviders()}
+                </div>
+                <div
+                    role="tabpanel"
+                    tabindex="0"
                     slot="page-changelog"
                     id="page-changelog"
                     aria-label="${msg("Changelog")}"
@@ -376,7 +386,7 @@ export class SAMLProviderViewPage extends AKElement {
                                 ${msg("Edit")}
                             </button>
                         </ak-forms-modal>
-                            <ak-forms-modal>
+                        <ak-forms-modal>
                             <span slot="submit">${msg("Apply")}</span>
                             <span slot="header">${msg("Apply metadata to this provider")}</span>
                             <ak-provider-saml-apply-metadata-form
@@ -387,8 +397,8 @@ export class SAMLProviderViewPage extends AKElement {
                             <button slot="trigger" class="pf-c-button pf-m-secondary">
                                 ${msg("Apply latest SP metadata")}
                             </button>
-                            </ak-forms-modal>
-                        </div>
+                        </ak-forms-modal>
+                    </div>
                 </div>
                 ${this.renderRelatedObjects()}
                 ${
@@ -603,6 +613,24 @@ export class SAMLProviderViewPage extends AKElement {
                 </div>
             </div>
         </div>`;
+    }
+
+    renderTabServiceProviders(): SlottedTemplateResult {
+        if (!this.provider) {
+            return nothing;
+        }
+
+        return html`
+            <div class="pf-c-page__main-section pf-m-no-padding-mobile pf-l-grid pf-m-gutter">
+                <div class="pf-c-card pf-l-grid__item pf-m-12-col">
+                    <div class="pf-c-card__title">${msg("Service Providers")}</div>
+                    <div class="pf-c-card__body">
+                        <ak-provider-saml-sp-tab .parent=${this.provider}>
+                        </ak-provider-saml-sp-tab>
+                    </div>
+                </div>
+            </div>
+        `;
     }
 }
 

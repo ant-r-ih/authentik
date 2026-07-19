@@ -7,6 +7,7 @@ import xmlsec
 from django.http import HttpRequest
 from lxml import etree  # nosec
 from lxml.etree import Element  # nosec
+from structlog.stdlib import get_logger
 
 from authentik.common.saml.constants import (
     DIGEST_ALGORITHM_TRANSLATION_MAP,
@@ -17,6 +18,7 @@ from authentik.common.saml.constants import (
     SIGN_ALGORITHM_TRANSFORM_MAP,
 )
 from authentik.lib.xml import remove_xml_newlines
+from authentik.providers.saml.resolve import build_idp_config
 from authentik.providers.saml.utils import get_random_id
 from authentik.providers.saml.utils.encoding import deflate_and_base64_encode
 from authentik.providers.saml.utils.keyring import pick_private_key_pem
@@ -24,6 +26,8 @@ from authentik.providers.saml.utils.time import get_time_string
 from authentik.sources.saml.models import SAMLBindingTypes, SAMLSource
 
 SESSION_KEY_REQUEST_ID = "authentik/sources/saml/request_id"
+REQUEST_KEY_ENTITY_ID = "entityID"
+LOGGER = get_logger()
 
 
 class RequestProcessor:
@@ -44,6 +48,15 @@ class RequestProcessor:
         self.request_id = get_random_id()
         self.http_request.session[SESSION_KEY_REQUEST_ID] = self.request_id
         self.issue_instant = get_time_string()
+        self.entity_id = self.http_request.GET.get(REQUEST_KEY_ENTITY_ID) or None
+        self.idp = self.source.get_idp(self.entity_id) if self.entity_id else None
+        if self.entity_id and self.idp is None:
+            LOGGER.warning(
+                "Unknown entityID requested, falling back to source defaults",
+                source_slug=self.source.slug,
+                entity_id=self.entity_id,
+            )
+        self.cfg = build_idp_config(self.source, self.idp)
 
     def get_issuer(self) -> Element:
         """Get Issuer Element"""
@@ -54,7 +67,7 @@ class RequestProcessor:
     def get_name_id_policy(self) -> Element:
         """Get NameID Policy Element"""
         name_id_policy = Element(f"{{{NS_SAML_PROTOCOL}}}NameIDPolicy")
-        name_id_policy.attrib["Format"] = self.source.name_id_policy
+        name_id_policy.attrib["Format"] = self.cfg.name_id_policy
         return name_id_policy
 
     def get_auth_n(self) -> Element:
@@ -63,7 +76,7 @@ class RequestProcessor:
         auth_n_request.attrib["AssertionConsumerServiceURL"] = self.source.build_full_url(
             self.http_request
         )
-        auth_n_request.attrib["Destination"] = self.source.sso_url
+        auth_n_request.attrib["Destination"] = self.cfg.sso_url
         auth_n_request.attrib["ID"] = self.request_id
         auth_n_request.attrib["IssueInstant"] = self.issue_instant
         auth_n_request.attrib["ProtocolBinding"] = SAML_BINDING_POST
@@ -74,12 +87,13 @@ class RequestProcessor:
         auth_n_request.append(self.get_issuer())
 
         key_pem, _ = pick_private_key_pem(
-            kp=self.source.signing_kp,
-            ring=getattr(self.source, "signing_kp_ring", None),
+            kp=self.cfg.keys.signing_kp,
+            ring=self.cfg.keys.signing_kp_ring,
         )
-        if key_pem and self.source.binding_type != SAMLBindingTypes.REDIRECT:
+        if key_pem and self.cfg.binding_type != SAMLBindingTypes.REDIRECT:
             sign_algorithm_transform = SIGN_ALGORITHM_TRANSFORM_MAP.get(
-                self.source.signature_algorithm, xmlsec.constants.TransformRsaSha1
+                self.cfg.keys.signature_algorithm,
+                xmlsec.constants.TransformRsaSha1,
             )
             signature = xmlsec.template.create(
                 auth_n_request,
@@ -99,25 +113,21 @@ class RequestProcessor:
         auth_n_request = self.get_auth_n()
 
         key_pem, cert_pem = pick_private_key_pem(
-            kp=self.source.signing_kp,
-            ring=getattr(self.source, "signing_kp_ring", None),
+            kp=self.cfg.keys.signing_kp,
+            ring=self.cfg.keys.signing_kp_ring,
         )
-        if key_pem and self.source.binding_type != SAMLBindingTypes.REDIRECT:
+        if key_pem and self.cfg.binding_type != SAMLBindingTypes.REDIRECT:
             xmlsec.tree.add_ids(auth_n_request, ["ID"])
 
             ctx = xmlsec.SignatureContext()
 
-            key = xmlsec.Key.from_memory(
-                key_pem, xmlsec.constants.KeyDataFormatPem, None
-            )
-            key.load_cert_from_memory(
-                cert_pem,
-                xmlsec.constants.KeyDataFormatCertPem,
-            )
+            key = xmlsec.Key.from_memory(key_pem, xmlsec.constants.KeyDataFormatPem, None)
+            if cert_pem:
+                key.load_cert_from_memory(cert_pem, xmlsec.constants.KeyDataFormatCertPem)
             ctx.key = key
 
             digest_algorithm_transform = DIGEST_ALGORITHM_TRANSLATION_MAP.get(
-                self.source.digest_algorithm, xmlsec.constants.TransformSha1
+                self.cfg.keys.digest_algorithm, xmlsec.constants.TransformSha1
             )
 
             signature_node = xmlsec.tree.find_node(auth_n_request, xmlsec.constants.NodeSignature)
@@ -151,33 +161,30 @@ class RequestProcessor:
             response_dict["RelayState"] = self.relay_state
 
         key_pem, cert_pem = pick_private_key_pem(
-            kp=self.source.signing_kp,
-            ring=getattr(self.source, "signing_kp_ring", None),
+            kp=self.cfg.keys.signing_kp,
+            ring=self.cfg.keys.signing_kp_ring,
         )
         if key_pem:
             sign_algorithm_transform = SIGN_ALGORITHM_TRANSFORM_MAP.get(
-                self.source.signature_algorithm, xmlsec.constants.TransformRsaSha1
+                self.cfg.keys.signature_algorithm,
+                xmlsec.constants.TransformRsaSha1,
             )
 
             # Create the full querystring in the correct order to be signed
             querystring = f"SAMLRequest={quote_plus(saml_request)}&"
             if "RelayState" in response_dict:
                 querystring += f"RelayState={quote_plus(response_dict['RelayState'])}&"
-            querystring += f"SigAlg={quote_plus(self.source.signature_algorithm)}"
+            querystring += f"SigAlg={quote_plus(self.cfg.keys.signature_algorithm)}"
 
             ctx = xmlsec.SignatureContext()
 
-            key = xmlsec.Key.from_memory(
-                key_pem, xmlsec.constants.KeyDataFormatPem, None
-            )
-            key.load_cert_from_memory(
-                cert_pem,
-                xmlsec.constants.KeyDataFormatPem,
-            )
+            key = xmlsec.Key.from_memory(key_pem, xmlsec.constants.KeyDataFormatPem, None)
+            if cert_pem:
+                key.load_cert_from_memory(cert_pem, xmlsec.constants.KeyDataFormatCertPem)
             ctx.key = key
 
             signature = ctx.sign_binary(querystring.encode("utf-8"), sign_algorithm_transform)
             response_dict["Signature"] = b64encode(signature).decode()
-            response_dict["SigAlg"] = self.source.signature_algorithm
+            response_dict["SigAlg"] = self.cfg.keys.signature_algorithm
 
         return response_dict

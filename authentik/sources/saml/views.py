@@ -9,6 +9,7 @@ from django.http import Http404, HttpRequest, HttpResponse
 from django.http.response import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.decorators import method_decorator
+from django.utils.html import escape
 from django.utils.http import urlencode
 from django.utils.translation import gettext as _
 from django.views import View
@@ -106,10 +107,12 @@ class InitiateView(View):
             raise Http404
         relay_state = request.GET.get("next", "")
         auth_n_req = RequestProcessor(source, request, relay_state)
+        resolved_binding = auth_n_req.cfg.binding_type
+        resolved_sso_url = auth_n_req.cfg.sso_url
         # If the source is configured for Redirect bindings, we can just redirect there
-        if source.binding_type == SAMLBindingTypes.REDIRECT:
+        if resolved_binding == SAMLBindingTypes.REDIRECT:
             # Parse the initial SSO URL
-            sso_url = urlparse(source.sso_url)
+            sso_url = urlparse(resolved_sso_url)
             # Parse the querystring into a dict...
             url_kwargs = dict(parse_qsl(sso_url.query))
             # ... and update it with the SAML args
@@ -130,11 +133,11 @@ class InitiateView(View):
                 "SAMLRequest": saml_request,
                 "RelayState": relay_state,
             },
-            PLAN_CONTEXT_URL: source.sso_url,
+            PLAN_CONTEXT_URL: resolved_sso_url,
         }
         # For just POST we add a consent stage,
         # otherwise we default to POST_AUTO, with direct redirect
-        if source.binding_type == SAMLBindingTypes.POST:
+        if resolved_binding == SAMLBindingTypes.POST:
             injected_stages.append(in_memory_stage(ConsentStageView))
             plan_kwargs[PLAN_CONTEXT_CONSENT_HEADER] = _(
                 "Continue to {source_name}".format(source_name=source.name)
@@ -201,3 +204,61 @@ class MetadataView(View):
         source: SAMLSource = get_object_or_404(SAMLSource, slug=source_slug)
         metadata = MetadataProcessor(source, request).build_entity_descriptor()
         return HttpResponse(metadata, content_type="text/xml")
+
+
+class DSView(View):
+    """Render a simple IdP selector page for a SAML source."""
+
+    def get(self, request: HttpRequest, source_slug: str) -> HttpResponse:
+        """List enabled IdPs and link to login with entityID selection."""
+        source: SAMLSource = get_object_or_404(SAMLSource, slug=source_slug, enabled=True)
+        idps = source.identity_providers.filter(enabled=True).order_by("name", "entity_id")
+
+        next_url = request.GET.get("next", "")
+        target = request.GET.get("target", "")
+        rows = []
+        for idp in idps:
+            params = {"SAMLDS": "1", "entityID": idp.entity_id}
+            if next_url:
+                params["next"] = next_url
+            if target:
+                params["target"] = target
+            href = f"/source/saml/{escape(source.slug)}/?{urlencode(params)}"
+
+            label = escape(idp.name or idp.entity_id)
+            eid = escape(idp.entity_id)
+            rows.append(f"""
+                <li style="display:flex; gap:12px; align-items:center; padding:8px 0; border-bottom:1px solid #eee;">
+                  <div style="flex:1; min-width:0;">
+                    <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{label}</div>
+                    <div style="font-family:monospace; font-size:12px; opacity:.75; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{eid}</div>
+                  </div>
+                  <a href="{href}" style="padding:6px 10px; border:1px solid #999; border-radius:6px; text-decoration:none;">Login</a>
+                </li>
+                """)  # noqa: E501
+
+        html = f"""
+        <!doctype html>
+        <html>
+          <head>
+            <meta charset="utf-8">
+            <title>DS: {escape(source.name)}</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+          </head>
+          <body style="font-family:system-ui, -apple-system, sans-serif; margin:24px; max-width:900px;">
+            <h1 style="margin:0 0 6px 0;">IdP Selector</h1>
+            <div style="opacity:.75; margin-bottom:18px;">
+              Source: <strong>{escape(source.name)}</strong> (slug: <code>{escape(source.slug)}</code>)
+            </div>
+
+            <div style="margin-bottom:12px; opacity:.8;">
+              Click an IdP to start login via <code>?SAMLDS=1&amp;entityID=...</code>
+            </div>
+
+            <ul style="list-style:none; padding:0; margin:0;">
+              {''.join(rows) if rows else '<li>No enabled IdPs.</li>'}
+            </ul>
+          </body>
+        </html>
+        """  # noqa: E501
+        return HttpResponse(html)

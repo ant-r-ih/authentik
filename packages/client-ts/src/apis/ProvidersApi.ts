@@ -128,6 +128,10 @@ import {
     PaginatedSAMLProviderListFromJSON,
 } from "../models/PaginatedSAMLProviderList";
 import {
+    type PaginatedSAMLSPList,
+    PaginatedSAMLSPListFromJSON,
+} from "../models/PaginatedSAMLSPList";
+import {
     type PaginatedSCIMProviderGroupList,
     PaginatedSCIMProviderGroupListFromJSON,
 } from "../models/PaginatedSCIMProviderGroupList";
@@ -180,6 +184,10 @@ import {
     PatchedSAMLProviderRequestToJSON,
 } from "../models/PatchedSAMLProviderRequest";
 import {
+    type PatchedSAMLSPRequest,
+    PatchedSAMLSPRequestToJSON,
+} from "../models/PatchedSAMLSPRequest";
+import {
     type PatchedSCIMProviderRequest,
     PatchedSCIMProviderRequestToJSON,
 } from "../models/PatchedSCIMProviderRequest";
@@ -214,6 +222,20 @@ import { type SAMLMetadata, SAMLMetadataFromJSON } from "../models/SAMLMetadata"
 import { type SAMLNameIDPolicyEnum } from "../models/SAMLNameIDPolicyEnum";
 import { type SAMLProvider, SAMLProviderFromJSON } from "../models/SAMLProvider";
 import { type SAMLProviderRequest, SAMLProviderRequestToJSON } from "../models/SAMLProviderRequest";
+import { type SAMLSP, SAMLSPFromJSON } from "../models/SAMLSP";
+import { type SAMLSPApplyRequest, SAMLSPApplyRequestToJSON } from "../models/SAMLSPApplyRequest";
+import {
+    type SAMLSPApplyResponse,
+    SAMLSPApplyResponseFromJSON,
+} from "../models/SAMLSPApplyResponse";
+import {
+    type SAMLSPPreviewRequest,
+    SAMLSPPreviewRequestToJSON,
+} from "../models/SAMLSPPreviewRequest";
+import {
+    type SAMLSPPreviewResponse,
+    SAMLSPPreviewResponseFromJSON,
+} from "../models/SAMLSPPreviewResponse";
 import { type SCIMProvider, SCIMProviderFromJSON } from "../models/SCIMProvider";
 import { type SCIMProviderGroup, SCIMProviderGroupFromJSON } from "../models/SCIMProviderGroup";
 import {
@@ -756,6 +778,74 @@ export interface ProvidersSamlRetrieveRequest {
     id: number;
 }
 
+export interface ProvidersSamlServiceProvidersApplyCreateRequest {
+    id: number;
+    sAMLSPApplyRequest?: SAMLSPApplyRequest;
+}
+
+export interface ProvidersSamlServiceProvidersDestroyRequest {
+    id: number;
+    spId: string;
+}
+
+export interface ProvidersSamlServiceProvidersListRequest {
+    id: number;
+    acsUrl?: string;
+    assertionValidNotBefore?: string;
+    assertionValidNotOnOrAfter?: string;
+    audience?: string;
+    authenticationFlow?: string;
+    authnContextClassRefMapping?: string;
+    authorizationFlow?: string;
+    backchannelApplication?: string;
+    defaultNameIdPolicy?: SAMLNameIDPolicyEnum;
+    defaultRelayState?: string;
+    digestAlgorithm?: DigestAlgorithmEnum;
+    encryptionKp?: string;
+    encryptionKpRing?: string;
+    entityId?: string;
+    invalidationFlow?: string;
+    isBackchannel?: boolean;
+    issuerOverride?: string;
+    logoutMethod?: SAMLLogoutMethods;
+    name?: string;
+    nameIdMapping?: string;
+    ordering?: string;
+    page?: number;
+    pageSize?: number;
+    propertyMappings?: Array<string>;
+    search?: string;
+    sessionValidNotOnOrAfter?: string;
+    signAssertion?: boolean;
+    signLogoutRequest?: boolean;
+    signLogoutResponse?: boolean;
+    signResponse?: boolean;
+    signatureAlgorithm?: SignatureAlgorithmEnum;
+    signingKp?: string;
+    signingKpRing?: string;
+    slsBinding?: SAMLBindingsEnum;
+    slsUrl?: string;
+    spBinding?: SAMLBindingsEnum;
+    verificationKp?: string;
+    verificationKpRing?: string;
+}
+
+export interface ProvidersSamlServiceProvidersPartialUpdateRequest {
+    id: number;
+    spId: string;
+    patchedSAMLSPRequest?: PatchedSAMLSPRequest;
+}
+
+export interface ProvidersSamlServiceProvidersPreviewCreateRequest {
+    id: number;
+    sAMLSPPreviewRequest?: SAMLSPPreviewRequest;
+}
+
+export interface ProvidersSamlServiceProvidersRetrieveRequest {
+    id: number;
+    spId: string;
+}
+
 export interface ProvidersSamlUpdateRequest {
     id: number;
     sAMLProviderRequest: SAMLProviderRequest;
@@ -964,6 +1054,74 @@ export interface ProvidersWsfedPreviewUserRetrieveRequest {
 
 export interface ProvidersWsfedRetrieveRequest {
     id: number;
+}
+
+export interface ProvidersWsfedServiceProvidersApplyCreateRequest {
+    id: number;
+    sAMLSPApplyRequest?: SAMLSPApplyRequest;
+}
+
+export interface ProvidersWsfedServiceProvidersDestroyRequest {
+    id: number;
+    spId: string;
+}
+
+export interface ProvidersWsfedServiceProvidersListRequest {
+    id: number;
+    acsUrl?: string;
+    assertionValidNotBefore?: string;
+    assertionValidNotOnOrAfter?: string;
+    audience?: string;
+    authenticationFlow?: string;
+    authnContextClassRefMapping?: string;
+    authorizationFlow?: string;
+    backchannelApplication?: string;
+    defaultNameIdPolicy?: SAMLNameIDPolicyEnum;
+    defaultRelayState?: string;
+    digestAlgorithm?: DigestAlgorithmEnum;
+    encryptionKp?: string;
+    encryptionKpRing?: string;
+    entityId?: string;
+    invalidationFlow?: string;
+    isBackchannel?: boolean;
+    issuerOverride?: string;
+    logoutMethod?: SAMLLogoutMethods;
+    name?: string;
+    nameIdMapping?: string;
+    ordering?: string;
+    page?: number;
+    pageSize?: number;
+    propertyMappings?: Array<string>;
+    search?: string;
+    sessionValidNotOnOrAfter?: string;
+    signAssertion?: boolean;
+    signLogoutRequest?: boolean;
+    signLogoutResponse?: boolean;
+    signResponse?: boolean;
+    signatureAlgorithm?: SignatureAlgorithmEnum;
+    signingKp?: string;
+    signingKpRing?: string;
+    slsBinding?: SAMLBindingsEnum;
+    slsUrl?: string;
+    spBinding?: SAMLBindingsEnum;
+    verificationKp?: string;
+    verificationKpRing?: string;
+}
+
+export interface ProvidersWsfedServiceProvidersPartialUpdateRequest {
+    id: number;
+    spId: string;
+    patchedSAMLSPRequest?: PatchedSAMLSPRequest;
+}
+
+export interface ProvidersWsfedServiceProvidersPreviewCreateRequest {
+    id: number;
+    sAMLSPPreviewRequest?: SAMLSPPreviewRequest;
+}
+
+export interface ProvidersWsfedServiceProvidersRetrieveRequest {
+    id: number;
+    spId: string;
 }
 
 export interface ProvidersWsfedUpdateRequest {
@@ -7345,6 +7503,588 @@ export class ProvidersApi extends runtime.BaseAPI {
     }
 
     /**
+     * Creates request options for providersSamlServiceProvidersApplyCreate without sending the request
+     */
+    async providersSamlServiceProvidersApplyCreateRequestOpts(
+        requestParameters: ProvidersSamlServiceProvidersApplyCreateRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersSamlServiceProvidersApplyCreate().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters["Content-Type"] = "application/json";
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/saml/{id}/service-providers/apply/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+
+        return {
+            path: urlPath,
+            method: "POST",
+            headers: headerParameters,
+            query: queryParameters,
+            body: SAMLSPApplyRequestToJSON(requestParameters["sAMLSPApplyRequest"]),
+        };
+    }
+
+    /**
+     * Apply SP metadata reconciliation results.
+     */
+    async providersSamlServiceProvidersApplyCreateRaw(
+        requestParameters: ProvidersSamlServiceProvidersApplyCreateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<SAMLSPApplyResponse>> {
+        const requestOptions =
+            await this.providersSamlServiceProvidersApplyCreateRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) =>
+            SAMLSPApplyResponseFromJSON(jsonValue),
+        );
+    }
+
+    /**
+     * Apply SP metadata reconciliation results.
+     */
+    async providersSamlServiceProvidersApplyCreate(
+        requestParameters: ProvidersSamlServiceProvidersApplyCreateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<SAMLSPApplyResponse> {
+        const response = await this.providersSamlServiceProvidersApplyCreateRaw(
+            requestParameters,
+            initOverrides,
+        );
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for providersSamlServiceProvidersDestroy without sending the request
+     */
+    async providersSamlServiceProvidersDestroyRequestOpts(
+        requestParameters: ProvidersSamlServiceProvidersDestroyRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersSamlServiceProvidersDestroy().',
+            );
+        }
+
+        if (requestParameters["spId"] == null) {
+            throw new runtime.RequiredError(
+                "spId",
+                'Required parameter "spId" was null or undefined when calling providersSamlServiceProvidersDestroy().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/saml/{id}/service-providers/{sp_id}/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+        urlPath = urlPath.replace("{sp_id}", encodeURIComponent(String(requestParameters["spId"])));
+
+        return {
+            path: urlPath,
+            method: "DELETE",
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersSamlServiceProvidersDestroyRaw(
+        requestParameters: ProvidersSamlServiceProvidersDestroyRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<void>> {
+        const requestOptions =
+            await this.providersSamlServiceProvidersDestroyRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.VoidApiResponse(response);
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersSamlServiceProvidersDestroy(
+        requestParameters: ProvidersSamlServiceProvidersDestroyRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<void> {
+        await this.providersSamlServiceProvidersDestroyRaw(requestParameters, initOverrides);
+    }
+
+    /**
+     * Creates request options for providersSamlServiceProvidersList without sending the request
+     */
+    async providersSamlServiceProvidersListRequestOpts(
+        requestParameters: ProvidersSamlServiceProvidersListRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersSamlServiceProvidersList().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters["acsUrl"] != null) {
+            queryParameters["acs_url"] = requestParameters["acsUrl"];
+        }
+
+        if (requestParameters["assertionValidNotBefore"] != null) {
+            queryParameters["assertion_valid_not_before"] =
+                requestParameters["assertionValidNotBefore"];
+        }
+
+        if (requestParameters["assertionValidNotOnOrAfter"] != null) {
+            queryParameters["assertion_valid_not_on_or_after"] =
+                requestParameters["assertionValidNotOnOrAfter"];
+        }
+
+        if (requestParameters["audience"] != null) {
+            queryParameters["audience"] = requestParameters["audience"];
+        }
+
+        if (requestParameters["authenticationFlow"] != null) {
+            queryParameters["authentication_flow"] = requestParameters["authenticationFlow"];
+        }
+
+        if (requestParameters["authnContextClassRefMapping"] != null) {
+            queryParameters["authn_context_class_ref_mapping"] =
+                requestParameters["authnContextClassRefMapping"];
+        }
+
+        if (requestParameters["authorizationFlow"] != null) {
+            queryParameters["authorization_flow"] = requestParameters["authorizationFlow"];
+        }
+
+        if (requestParameters["backchannelApplication"] != null) {
+            queryParameters["backchannel_application"] =
+                requestParameters["backchannelApplication"];
+        }
+
+        if (requestParameters["defaultNameIdPolicy"] != null) {
+            queryParameters["default_name_id_policy"] = requestParameters["defaultNameIdPolicy"];
+        }
+
+        if (requestParameters["defaultRelayState"] != null) {
+            queryParameters["default_relay_state"] = requestParameters["defaultRelayState"];
+        }
+
+        if (requestParameters["digestAlgorithm"] != null) {
+            queryParameters["digest_algorithm"] = requestParameters["digestAlgorithm"];
+        }
+
+        if (requestParameters["encryptionKp"] != null) {
+            queryParameters["encryption_kp"] = requestParameters["encryptionKp"];
+        }
+
+        if (requestParameters["encryptionKpRing"] != null) {
+            queryParameters["encryption_kp_ring"] = requestParameters["encryptionKpRing"];
+        }
+
+        if (requestParameters["entityId"] != null) {
+            queryParameters["entity_id"] = requestParameters["entityId"];
+        }
+
+        if (requestParameters["invalidationFlow"] != null) {
+            queryParameters["invalidation_flow"] = requestParameters["invalidationFlow"];
+        }
+
+        if (requestParameters["isBackchannel"] != null) {
+            queryParameters["is_backchannel"] = requestParameters["isBackchannel"];
+        }
+
+        if (requestParameters["issuerOverride"] != null) {
+            queryParameters["issuer_override"] = requestParameters["issuerOverride"];
+        }
+
+        if (requestParameters["logoutMethod"] != null) {
+            queryParameters["logout_method"] = requestParameters["logoutMethod"];
+        }
+
+        if (requestParameters["name"] != null) {
+            queryParameters["name"] = requestParameters["name"];
+        }
+
+        if (requestParameters["nameIdMapping"] != null) {
+            queryParameters["name_id_mapping"] = requestParameters["nameIdMapping"];
+        }
+
+        if (requestParameters["ordering"] != null) {
+            queryParameters["ordering"] = requestParameters["ordering"];
+        }
+
+        if (requestParameters["page"] != null) {
+            queryParameters["page"] = requestParameters["page"];
+        }
+
+        if (requestParameters["pageSize"] != null) {
+            queryParameters["page_size"] = requestParameters["pageSize"];
+        }
+
+        if (requestParameters["propertyMappings"] != null) {
+            queryParameters["property_mappings"] = requestParameters["propertyMappings"];
+        }
+
+        if (requestParameters["search"] != null) {
+            queryParameters["search"] = requestParameters["search"];
+        }
+
+        if (requestParameters["sessionValidNotOnOrAfter"] != null) {
+            queryParameters["session_valid_not_on_or_after"] =
+                requestParameters["sessionValidNotOnOrAfter"];
+        }
+
+        if (requestParameters["signAssertion"] != null) {
+            queryParameters["sign_assertion"] = requestParameters["signAssertion"];
+        }
+
+        if (requestParameters["signLogoutRequest"] != null) {
+            queryParameters["sign_logout_request"] = requestParameters["signLogoutRequest"];
+        }
+
+        if (requestParameters["signLogoutResponse"] != null) {
+            queryParameters["sign_logout_response"] = requestParameters["signLogoutResponse"];
+        }
+
+        if (requestParameters["signResponse"] != null) {
+            queryParameters["sign_response"] = requestParameters["signResponse"];
+        }
+
+        if (requestParameters["signatureAlgorithm"] != null) {
+            queryParameters["signature_algorithm"] = requestParameters["signatureAlgorithm"];
+        }
+
+        if (requestParameters["signingKp"] != null) {
+            queryParameters["signing_kp"] = requestParameters["signingKp"];
+        }
+
+        if (requestParameters["signingKpRing"] != null) {
+            queryParameters["signing_kp_ring"] = requestParameters["signingKpRing"];
+        }
+
+        if (requestParameters["slsBinding"] != null) {
+            queryParameters["sls_binding"] = requestParameters["slsBinding"];
+        }
+
+        if (requestParameters["slsUrl"] != null) {
+            queryParameters["sls_url"] = requestParameters["slsUrl"];
+        }
+
+        if (requestParameters["spBinding"] != null) {
+            queryParameters["sp_binding"] = requestParameters["spBinding"];
+        }
+
+        if (requestParameters["verificationKp"] != null) {
+            queryParameters["verification_kp"] = requestParameters["verificationKp"];
+        }
+
+        if (requestParameters["verificationKpRing"] != null) {
+            queryParameters["verification_kp_ring"] = requestParameters["verificationKpRing"];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/saml/{id}/service-providers/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+
+        return {
+            path: urlPath,
+            method: "GET",
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * List nested service providers for this SAML provider.
+     */
+    async providersSamlServiceProvidersListRaw(
+        requestParameters: ProvidersSamlServiceProvidersListRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<PaginatedSAMLSPList>> {
+        const requestOptions =
+            await this.providersSamlServiceProvidersListRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) =>
+            PaginatedSAMLSPListFromJSON(jsonValue),
+        );
+    }
+
+    /**
+     * List nested service providers for this SAML provider.
+     */
+    async providersSamlServiceProvidersList(
+        requestParameters: ProvidersSamlServiceProvidersListRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<PaginatedSAMLSPList> {
+        const response = await this.providersSamlServiceProvidersListRaw(
+            requestParameters,
+            initOverrides,
+        );
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for providersSamlServiceProvidersPartialUpdate without sending the request
+     */
+    async providersSamlServiceProvidersPartialUpdateRequestOpts(
+        requestParameters: ProvidersSamlServiceProvidersPartialUpdateRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersSamlServiceProvidersPartialUpdate().',
+            );
+        }
+
+        if (requestParameters["spId"] == null) {
+            throw new runtime.RequiredError(
+                "spId",
+                'Required parameter "spId" was null or undefined when calling providersSamlServiceProvidersPartialUpdate().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters["Content-Type"] = "application/json";
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/saml/{id}/service-providers/{sp_id}/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+        urlPath = urlPath.replace("{sp_id}", encodeURIComponent(String(requestParameters["spId"])));
+
+        return {
+            path: urlPath,
+            method: "PATCH",
+            headers: headerParameters,
+            query: queryParameters,
+            body: PatchedSAMLSPRequestToJSON(requestParameters["patchedSAMLSPRequest"]),
+        };
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersSamlServiceProvidersPartialUpdateRaw(
+        requestParameters: ProvidersSamlServiceProvidersPartialUpdateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<SAMLSP>> {
+        const requestOptions =
+            await this.providersSamlServiceProvidersPartialUpdateRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => SAMLSPFromJSON(jsonValue));
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersSamlServiceProvidersPartialUpdate(
+        requestParameters: ProvidersSamlServiceProvidersPartialUpdateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<SAMLSP> {
+        const response = await this.providersSamlServiceProvidersPartialUpdateRaw(
+            requestParameters,
+            initOverrides,
+        );
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for providersSamlServiceProvidersPreviewCreate without sending the request
+     */
+    async providersSamlServiceProvidersPreviewCreateRequestOpts(
+        requestParameters: ProvidersSamlServiceProvidersPreviewCreateRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersSamlServiceProvidersPreviewCreate().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters["Content-Type"] = "application/json";
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/saml/{id}/service-providers/preview/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+
+        return {
+            path: urlPath,
+            method: "POST",
+            headers: headerParameters,
+            query: queryParameters,
+            body: SAMLSPPreviewRequestToJSON(requestParameters["sAMLSPPreviewRequest"]),
+        };
+    }
+
+    /**
+     * Preview SP metadata reconciliation results.
+     */
+    async providersSamlServiceProvidersPreviewCreateRaw(
+        requestParameters: ProvidersSamlServiceProvidersPreviewCreateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<SAMLSPPreviewResponse>> {
+        const requestOptions =
+            await this.providersSamlServiceProvidersPreviewCreateRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) =>
+            SAMLSPPreviewResponseFromJSON(jsonValue),
+        );
+    }
+
+    /**
+     * Preview SP metadata reconciliation results.
+     */
+    async providersSamlServiceProvidersPreviewCreate(
+        requestParameters: ProvidersSamlServiceProvidersPreviewCreateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<SAMLSPPreviewResponse> {
+        const response = await this.providersSamlServiceProvidersPreviewCreateRaw(
+            requestParameters,
+            initOverrides,
+        );
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for providersSamlServiceProvidersRetrieve without sending the request
+     */
+    async providersSamlServiceProvidersRetrieveRequestOpts(
+        requestParameters: ProvidersSamlServiceProvidersRetrieveRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersSamlServiceProvidersRetrieve().',
+            );
+        }
+
+        if (requestParameters["spId"] == null) {
+            throw new runtime.RequiredError(
+                "spId",
+                'Required parameter "spId" was null or undefined when calling providersSamlServiceProvidersRetrieve().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/saml/{id}/service-providers/{sp_id}/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+        urlPath = urlPath.replace("{sp_id}", encodeURIComponent(String(requestParameters["spId"])));
+
+        return {
+            path: urlPath,
+            method: "GET",
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersSamlServiceProvidersRetrieveRaw(
+        requestParameters: ProvidersSamlServiceProvidersRetrieveRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<SAMLSP>> {
+        const requestOptions =
+            await this.providersSamlServiceProvidersRetrieveRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => SAMLSPFromJSON(jsonValue));
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersSamlServiceProvidersRetrieve(
+        requestParameters: ProvidersSamlServiceProvidersRetrieveRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<SAMLSP> {
+        const response = await this.providersSamlServiceProvidersRetrieveRaw(
+            requestParameters,
+            initOverrides,
+        );
+        return await response.value();
+    }
+
+    /**
      * Creates request options for providersSamlUpdate without sending the request
      */
     async providersSamlUpdateRequestOpts(
@@ -9842,6 +10582,588 @@ export class ProvidersApi extends runtime.BaseAPI {
         initOverrides?: RequestInit | runtime.InitOverrideFunction,
     ): Promise<WSFederationProvider> {
         const response = await this.providersWsfedRetrieveRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for providersWsfedServiceProvidersApplyCreate without sending the request
+     */
+    async providersWsfedServiceProvidersApplyCreateRequestOpts(
+        requestParameters: ProvidersWsfedServiceProvidersApplyCreateRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersWsfedServiceProvidersApplyCreate().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters["Content-Type"] = "application/json";
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/wsfed/{id}/service-providers/apply/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+
+        return {
+            path: urlPath,
+            method: "POST",
+            headers: headerParameters,
+            query: queryParameters,
+            body: SAMLSPApplyRequestToJSON(requestParameters["sAMLSPApplyRequest"]),
+        };
+    }
+
+    /**
+     * Apply SP metadata reconciliation results.
+     */
+    async providersWsfedServiceProvidersApplyCreateRaw(
+        requestParameters: ProvidersWsfedServiceProvidersApplyCreateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<SAMLSPApplyResponse>> {
+        const requestOptions =
+            await this.providersWsfedServiceProvidersApplyCreateRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) =>
+            SAMLSPApplyResponseFromJSON(jsonValue),
+        );
+    }
+
+    /**
+     * Apply SP metadata reconciliation results.
+     */
+    async providersWsfedServiceProvidersApplyCreate(
+        requestParameters: ProvidersWsfedServiceProvidersApplyCreateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<SAMLSPApplyResponse> {
+        const response = await this.providersWsfedServiceProvidersApplyCreateRaw(
+            requestParameters,
+            initOverrides,
+        );
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for providersWsfedServiceProvidersDestroy without sending the request
+     */
+    async providersWsfedServiceProvidersDestroyRequestOpts(
+        requestParameters: ProvidersWsfedServiceProvidersDestroyRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersWsfedServiceProvidersDestroy().',
+            );
+        }
+
+        if (requestParameters["spId"] == null) {
+            throw new runtime.RequiredError(
+                "spId",
+                'Required parameter "spId" was null or undefined when calling providersWsfedServiceProvidersDestroy().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/wsfed/{id}/service-providers/{sp_id}/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+        urlPath = urlPath.replace("{sp_id}", encodeURIComponent(String(requestParameters["spId"])));
+
+        return {
+            path: urlPath,
+            method: "DELETE",
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersWsfedServiceProvidersDestroyRaw(
+        requestParameters: ProvidersWsfedServiceProvidersDestroyRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<void>> {
+        const requestOptions =
+            await this.providersWsfedServiceProvidersDestroyRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.VoidApiResponse(response);
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersWsfedServiceProvidersDestroy(
+        requestParameters: ProvidersWsfedServiceProvidersDestroyRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<void> {
+        await this.providersWsfedServiceProvidersDestroyRaw(requestParameters, initOverrides);
+    }
+
+    /**
+     * Creates request options for providersWsfedServiceProvidersList without sending the request
+     */
+    async providersWsfedServiceProvidersListRequestOpts(
+        requestParameters: ProvidersWsfedServiceProvidersListRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersWsfedServiceProvidersList().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters["acsUrl"] != null) {
+            queryParameters["acs_url"] = requestParameters["acsUrl"];
+        }
+
+        if (requestParameters["assertionValidNotBefore"] != null) {
+            queryParameters["assertion_valid_not_before"] =
+                requestParameters["assertionValidNotBefore"];
+        }
+
+        if (requestParameters["assertionValidNotOnOrAfter"] != null) {
+            queryParameters["assertion_valid_not_on_or_after"] =
+                requestParameters["assertionValidNotOnOrAfter"];
+        }
+
+        if (requestParameters["audience"] != null) {
+            queryParameters["audience"] = requestParameters["audience"];
+        }
+
+        if (requestParameters["authenticationFlow"] != null) {
+            queryParameters["authentication_flow"] = requestParameters["authenticationFlow"];
+        }
+
+        if (requestParameters["authnContextClassRefMapping"] != null) {
+            queryParameters["authn_context_class_ref_mapping"] =
+                requestParameters["authnContextClassRefMapping"];
+        }
+
+        if (requestParameters["authorizationFlow"] != null) {
+            queryParameters["authorization_flow"] = requestParameters["authorizationFlow"];
+        }
+
+        if (requestParameters["backchannelApplication"] != null) {
+            queryParameters["backchannel_application"] =
+                requestParameters["backchannelApplication"];
+        }
+
+        if (requestParameters["defaultNameIdPolicy"] != null) {
+            queryParameters["default_name_id_policy"] = requestParameters["defaultNameIdPolicy"];
+        }
+
+        if (requestParameters["defaultRelayState"] != null) {
+            queryParameters["default_relay_state"] = requestParameters["defaultRelayState"];
+        }
+
+        if (requestParameters["digestAlgorithm"] != null) {
+            queryParameters["digest_algorithm"] = requestParameters["digestAlgorithm"];
+        }
+
+        if (requestParameters["encryptionKp"] != null) {
+            queryParameters["encryption_kp"] = requestParameters["encryptionKp"];
+        }
+
+        if (requestParameters["encryptionKpRing"] != null) {
+            queryParameters["encryption_kp_ring"] = requestParameters["encryptionKpRing"];
+        }
+
+        if (requestParameters["entityId"] != null) {
+            queryParameters["entity_id"] = requestParameters["entityId"];
+        }
+
+        if (requestParameters["invalidationFlow"] != null) {
+            queryParameters["invalidation_flow"] = requestParameters["invalidationFlow"];
+        }
+
+        if (requestParameters["isBackchannel"] != null) {
+            queryParameters["is_backchannel"] = requestParameters["isBackchannel"];
+        }
+
+        if (requestParameters["issuerOverride"] != null) {
+            queryParameters["issuer_override"] = requestParameters["issuerOverride"];
+        }
+
+        if (requestParameters["logoutMethod"] != null) {
+            queryParameters["logout_method"] = requestParameters["logoutMethod"];
+        }
+
+        if (requestParameters["name"] != null) {
+            queryParameters["name"] = requestParameters["name"];
+        }
+
+        if (requestParameters["nameIdMapping"] != null) {
+            queryParameters["name_id_mapping"] = requestParameters["nameIdMapping"];
+        }
+
+        if (requestParameters["ordering"] != null) {
+            queryParameters["ordering"] = requestParameters["ordering"];
+        }
+
+        if (requestParameters["page"] != null) {
+            queryParameters["page"] = requestParameters["page"];
+        }
+
+        if (requestParameters["pageSize"] != null) {
+            queryParameters["page_size"] = requestParameters["pageSize"];
+        }
+
+        if (requestParameters["propertyMappings"] != null) {
+            queryParameters["property_mappings"] = requestParameters["propertyMappings"];
+        }
+
+        if (requestParameters["search"] != null) {
+            queryParameters["search"] = requestParameters["search"];
+        }
+
+        if (requestParameters["sessionValidNotOnOrAfter"] != null) {
+            queryParameters["session_valid_not_on_or_after"] =
+                requestParameters["sessionValidNotOnOrAfter"];
+        }
+
+        if (requestParameters["signAssertion"] != null) {
+            queryParameters["sign_assertion"] = requestParameters["signAssertion"];
+        }
+
+        if (requestParameters["signLogoutRequest"] != null) {
+            queryParameters["sign_logout_request"] = requestParameters["signLogoutRequest"];
+        }
+
+        if (requestParameters["signLogoutResponse"] != null) {
+            queryParameters["sign_logout_response"] = requestParameters["signLogoutResponse"];
+        }
+
+        if (requestParameters["signResponse"] != null) {
+            queryParameters["sign_response"] = requestParameters["signResponse"];
+        }
+
+        if (requestParameters["signatureAlgorithm"] != null) {
+            queryParameters["signature_algorithm"] = requestParameters["signatureAlgorithm"];
+        }
+
+        if (requestParameters["signingKp"] != null) {
+            queryParameters["signing_kp"] = requestParameters["signingKp"];
+        }
+
+        if (requestParameters["signingKpRing"] != null) {
+            queryParameters["signing_kp_ring"] = requestParameters["signingKpRing"];
+        }
+
+        if (requestParameters["slsBinding"] != null) {
+            queryParameters["sls_binding"] = requestParameters["slsBinding"];
+        }
+
+        if (requestParameters["slsUrl"] != null) {
+            queryParameters["sls_url"] = requestParameters["slsUrl"];
+        }
+
+        if (requestParameters["spBinding"] != null) {
+            queryParameters["sp_binding"] = requestParameters["spBinding"];
+        }
+
+        if (requestParameters["verificationKp"] != null) {
+            queryParameters["verification_kp"] = requestParameters["verificationKp"];
+        }
+
+        if (requestParameters["verificationKpRing"] != null) {
+            queryParameters["verification_kp_ring"] = requestParameters["verificationKpRing"];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/wsfed/{id}/service-providers/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+
+        return {
+            path: urlPath,
+            method: "GET",
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * List nested service providers for this SAML provider.
+     */
+    async providersWsfedServiceProvidersListRaw(
+        requestParameters: ProvidersWsfedServiceProvidersListRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<PaginatedSAMLSPList>> {
+        const requestOptions =
+            await this.providersWsfedServiceProvidersListRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) =>
+            PaginatedSAMLSPListFromJSON(jsonValue),
+        );
+    }
+
+    /**
+     * List nested service providers for this SAML provider.
+     */
+    async providersWsfedServiceProvidersList(
+        requestParameters: ProvidersWsfedServiceProvidersListRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<PaginatedSAMLSPList> {
+        const response = await this.providersWsfedServiceProvidersListRaw(
+            requestParameters,
+            initOverrides,
+        );
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for providersWsfedServiceProvidersPartialUpdate without sending the request
+     */
+    async providersWsfedServiceProvidersPartialUpdateRequestOpts(
+        requestParameters: ProvidersWsfedServiceProvidersPartialUpdateRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersWsfedServiceProvidersPartialUpdate().',
+            );
+        }
+
+        if (requestParameters["spId"] == null) {
+            throw new runtime.RequiredError(
+                "spId",
+                'Required parameter "spId" was null or undefined when calling providersWsfedServiceProvidersPartialUpdate().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters["Content-Type"] = "application/json";
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/wsfed/{id}/service-providers/{sp_id}/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+        urlPath = urlPath.replace("{sp_id}", encodeURIComponent(String(requestParameters["spId"])));
+
+        return {
+            path: urlPath,
+            method: "PATCH",
+            headers: headerParameters,
+            query: queryParameters,
+            body: PatchedSAMLSPRequestToJSON(requestParameters["patchedSAMLSPRequest"]),
+        };
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersWsfedServiceProvidersPartialUpdateRaw(
+        requestParameters: ProvidersWsfedServiceProvidersPartialUpdateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<SAMLSP>> {
+        const requestOptions =
+            await this.providersWsfedServiceProvidersPartialUpdateRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => SAMLSPFromJSON(jsonValue));
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersWsfedServiceProvidersPartialUpdate(
+        requestParameters: ProvidersWsfedServiceProvidersPartialUpdateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<SAMLSP> {
+        const response = await this.providersWsfedServiceProvidersPartialUpdateRaw(
+            requestParameters,
+            initOverrides,
+        );
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for providersWsfedServiceProvidersPreviewCreate without sending the request
+     */
+    async providersWsfedServiceProvidersPreviewCreateRequestOpts(
+        requestParameters: ProvidersWsfedServiceProvidersPreviewCreateRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersWsfedServiceProvidersPreviewCreate().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters["Content-Type"] = "application/json";
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/wsfed/{id}/service-providers/preview/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+
+        return {
+            path: urlPath,
+            method: "POST",
+            headers: headerParameters,
+            query: queryParameters,
+            body: SAMLSPPreviewRequestToJSON(requestParameters["sAMLSPPreviewRequest"]),
+        };
+    }
+
+    /**
+     * Preview SP metadata reconciliation results.
+     */
+    async providersWsfedServiceProvidersPreviewCreateRaw(
+        requestParameters: ProvidersWsfedServiceProvidersPreviewCreateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<SAMLSPPreviewResponse>> {
+        const requestOptions =
+            await this.providersWsfedServiceProvidersPreviewCreateRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) =>
+            SAMLSPPreviewResponseFromJSON(jsonValue),
+        );
+    }
+
+    /**
+     * Preview SP metadata reconciliation results.
+     */
+    async providersWsfedServiceProvidersPreviewCreate(
+        requestParameters: ProvidersWsfedServiceProvidersPreviewCreateRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<SAMLSPPreviewResponse> {
+        const response = await this.providersWsfedServiceProvidersPreviewCreateRaw(
+            requestParameters,
+            initOverrides,
+        );
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for providersWsfedServiceProvidersRetrieve without sending the request
+     */
+    async providersWsfedServiceProvidersRetrieveRequestOpts(
+        requestParameters: ProvidersWsfedServiceProvidersRetrieveRequest,
+    ): Promise<runtime.RequestOpts> {
+        if (requestParameters["id"] == null) {
+            throw new runtime.RequiredError(
+                "id",
+                'Required parameter "id" was null or undefined when calling providersWsfedServiceProvidersRetrieve().',
+            );
+        }
+
+        if (requestParameters["spId"] == null) {
+            throw new runtime.RequiredError(
+                "spId",
+                'Required parameter "spId" was null or undefined when calling providersWsfedServiceProvidersRetrieve().',
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("authentik", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/providers/wsfed/{id}/service-providers/{sp_id}/`;
+        urlPath = urlPath.replace("{id}", encodeURIComponent(String(requestParameters["id"])));
+        urlPath = urlPath.replace("{sp_id}", encodeURIComponent(String(requestParameters["spId"])));
+
+        return {
+            path: urlPath,
+            method: "GET",
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersWsfedServiceProvidersRetrieveRaw(
+        requestParameters: ProvidersWsfedServiceProvidersRetrieveRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<runtime.ApiResponse<SAMLSP>> {
+        const requestOptions =
+            await this.providersWsfedServiceProvidersRetrieveRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => SAMLSPFromJSON(jsonValue));
+    }
+
+    /**
+     * Retrieve, update, or delete one nested service provider.
+     */
+    async providersWsfedServiceProvidersRetrieve(
+        requestParameters: ProvidersWsfedServiceProvidersRetrieveRequest,
+        initOverrides?: RequestInit | runtime.InitOverrideFunction,
+    ): Promise<SAMLSP> {
+        const response = await this.providersWsfedServiceProvidersRetrieveRaw(
+            requestParameters,
+            initOverrides,
+        );
         return await response.value();
     }
 

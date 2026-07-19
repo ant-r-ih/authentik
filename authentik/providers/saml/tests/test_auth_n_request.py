@@ -754,3 +754,28 @@ class TestAuthNRequest(TestCase):
             b64encode(request.encode()).decode(), "test_state"
         )
         self.assertTrue(parsed_request.force_authn)
+
+    def test_parse_resolves_service_provider_by_issuer(self):
+        """Test parser resolves ACS target from matched SAMLSP instead of provider default."""
+        http_request = self.request_factory.get("/", user=create_test_admin_user())
+        resolved_acs = "http://testserver/source/saml/provider/acs/"
+        self.provider.acs_url = "https://default.example.org/acs"
+        self.provider.save(update_fields=["acs_url"])
+        self.provider.service_providers.create(
+            entity_id=self.source.issuer_override,
+            enabled=True,
+            acs_url=resolved_acs,
+            sp_binding="post",
+        )
+
+        request_proc = RequestProcessor(self.source, http_request, "test_state")
+        request = request_proc.build_auth_n()
+        parsed_request = AuthNRequestParser(self.provider).parse(
+            b64encode(request.encode()).decode(), "test_state"
+        )
+        self.assertFalse(parsed_request.force_authn)
+        self.assertEqual(parsed_request.acs_url, resolved_acs)
+        self.assertEqual(parsed_request.sp_binding, "post")
+
+        response = AssertionProcessor(self.provider, http_request, parsed_request).build_response()
+        self.assertIn(f'Destination="{resolved_acs}"', response)

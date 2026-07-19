@@ -36,6 +36,7 @@ from authentik.core.models import (
 )
 from authentik.core.sources.flow_manager import SourceFlowManager
 from authentik.lib.utils.time import timedelta_from_string
+from authentik.providers.saml.resolve import build_idp_config, peek_issuer
 from authentik.providers.saml.utils.keyring import candidate_cert_pems, candidate_private_key_pems
 from authentik.sources.saml.exceptions import (
     InvalidEncryption,
@@ -70,10 +71,13 @@ class ResponseProcessor:
     _http_request: HttpRequest
 
     _assertion: _Element | None = None
+    _idp = None
+    _cfg = None
 
     def __init__(self, source: SAMLSource, request: HttpRequest):
         self._source = source
         self._http_request = request
+        self._cfg = build_idp_config(self._source, None)
 
     def parse(self):
         """Check if `request` contains SAML Response data, parse and validate it."""
@@ -83,23 +87,26 @@ class ResponseProcessor:
 
         self._root_xml = b64decode(raw_response.encode())
         self._root = fromstring(self._root_xml)
+        issuer = peek_issuer(self._root)
+        self._idp = self._source.get_idp(issuer)
+        self._cfg = build_idp_config(self._source, self._idp)
 
         # keyring-aware candidates
         verifier_pems = candidate_cert_pems(
-            kp=self._source.verification_kp,
-            ring=getattr(self._source, "verification_kp_ring", None),
+            kp=self._cfg.keys.verification_kp,
+            ring=self._cfg.keys.verification_kp_ring,
         )
 
         # Verify response signature BEFORE decryption (signature covers encrypted content)
-        if verifier_pems and self._source.signed_response:
+        if verifier_pems and self._cfg.signed_response:
             self._verify_response_signature(verifier_pems)
 
         # Decrypt (may need to try multiple private keys)
-        if self._source.encryption_kp or getattr(self._source, "encryption_kp_ring", None):
+        if self._cfg.keys.encryption_kp or self._cfg.keys.encryption_kp_ring:
             self._decrypt_response()
 
         # Verify assertion signature AFTER decryption (signature is inside encrypted content)
-        if verifier_pems and self._source.signed_assertion:
+        if verifier_pems and self._cfg.signed_assertion:
             self._verify_assertion_signature(verifier_pems)
 
         self._verify_request_id()
@@ -123,8 +130,8 @@ class ResponseProcessor:
         # Try private keys in order (KP wins over ring)
         last_exc: Exception | None = None
         for key_pem, _cert_pem in candidate_private_key_pems(
-            kp=self._source.encryption_kp,
-            ring=getattr(self._source, "encryption_kp_ring", None),
+            kp=self._cfg.keys.encryption_kp,
+            ring=self._cfg.keys.encryption_kp_ring,
         ):
             try:
                 manager = xmlsec.KeysManager()
@@ -143,6 +150,20 @@ class ResponseProcessor:
                 continue
 
         raise InvalidEncryption() from last_exc
+
+    def _verify_conditions(self):
+        conditions = self.get_assertion().find(f"{{{NS_SAML_ASSERTION}}}Conditions")
+        if conditions is None:
+            return
+        _now = now()
+        before = conditions.attrib.get("NotBefore")
+        if before:
+            if datetime.fromisoformat(before).replace(tzinfo=UTC) > _now:
+                raise SAMLException("Assertion is not valid yet or expired.")
+        on_or_after = conditions.attrib.get("NotOnOrAfter")
+        if on_or_after:
+            if datetime.fromisoformat(on_or_after).replace(tzinfo=UTC) < _now:
+                raise SAMLException("Assertion is not valid yet or expired.")
 
     def _verify_signature(
         self, signature_node: _Element, target: _Element, verifier_pems: list[str]
@@ -177,7 +198,9 @@ class ResponseProcessor:
                 last_exc = exc
                 continue
 
-        raise InvalidSignature("The signature of the SAML object is either missing or invalid.") from last_exc
+        raise InvalidSignature(
+            "The signature of the SAML object is either missing or invalid."
+        ) from last_exc
 
     def _verify_response_signature(self, verifier_pems: list[str]):
         """Verify SAML Response's Signature (before decryption)"""
@@ -204,7 +227,7 @@ class ResponseProcessor:
         self._assertion = assertion
 
     def _verify_request_id(self):
-        if self._source.allow_idp_initiated:
+        if self._cfg.allow_idp_initiated:
             seen_ids = cache.get(CACHE_SEEN_REQUEST_ID % self._source.pk, [])
             if self._root.attrib["ID"] in seen_ids:
                 raise SuspiciousOperation("Replay attack detected")
@@ -239,20 +262,6 @@ class ResponseProcessor:
         if message_text or detail_text:
             LOGGER.debug("SAML Status message", message=message_text, detail=detail_text)
 
-    def _verify_conditions(self):
-        conditions = self.get_assertion().find(f"{{{NS_SAML_ASSERTION}}}Conditions")
-        if conditions is None:
-            return
-        _now = now()
-        before = conditions.attrib.get("NotBefore")
-        if before:
-            if datetime.fromisoformat(before).replace(tzinfo=UTC) > _now:
-                raise SAMLException("Assertion is not valid yet or expired.")
-        on_or_after = conditions.attrib.get("NotOnOrAfter")
-        if on_or_after:
-            if datetime.fromisoformat(on_or_after).replace(tzinfo=UTC) < _now:
-                raise SAMLException("Assertion is not valid yet or expired.")
-
     def get_assertion(self) -> Element | None:
         """Get assertion element, if we have a signed assertion"""
         if self._assertion is not None:
@@ -279,7 +288,7 @@ class ResponseProcessor:
             raise UnsupportedNameIDFormat("Subject's NameID is empty.")
         _format = name_id_el.attrib.get("Format")
         if not _format:
-            raise UnsupportedNameIDFormat("Subject NameID has no Format attribute.")
+            raise UnsupportedNameIDFormat("Subject's NameID has no Format attribute.")
         if _format == SAML_NAME_ID_FORMAT_EMAIL:
             return {"email": name_id}
         if _format in [SAML_NAME_ID_FORMAT_PERSISTENT, SAML_NAME_ID_FORMAT_TRANSIENT]:
@@ -299,10 +308,10 @@ class ResponseProcessor:
         """Prepare flow plan depending on whether or not the user exists"""
         name_id_el, name_id = self._get_name_id()
         # Sanity check, show a warning if NameIDPolicy doesn't match what we go
-        if self._source.name_id_policy != name_id_el.attrib["Format"]:
+        if self._cfg.name_id_policy != name_id_el.attrib["Format"]:
             LOGGER.warning(
                 "NameID from IdP doesn't match our policy",
-                expected=self._source.name_id_policy,
+                expected=self._cfg.name_id_policy,
                 got=name_id_el.attrib["Format"],
             )
         attributes = getattr(self, "_saml_attributes", None)
@@ -348,9 +357,7 @@ class ResponseProcessor:
                 "name_id": name_id_el,
                 "saml_attributes": attributes,
             },
-            policy_context={
-                "saml_response": etree.tostring(self._root),
-            },
+            policy_context={"saml_response": etree.tostring(self._root)},
         )
 
 

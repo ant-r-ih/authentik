@@ -1,6 +1,7 @@
 """Test Identity-Provider Metadata Parser"""
 
 from base64 import b64encode
+from dataclasses import replace
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -9,9 +10,15 @@ from django.test import TestCase
 
 from authentik.core.tests.utils import create_test_cert, create_test_flow
 from authentik.crypto.builder import PrivateKeyAlg
+from authentik.lib.generators import generate_id
 from authentik.lib.tests.utils import load_fixture
-from authentik.sources.saml.models import SAMLNameIDPolicy
-from authentik.sources.saml.processors.metadata_parser import IdentityProviderMetadataParser
+from authentik.providers.saml.models import SAMLIDP
+from authentik.sources.saml.models import SAMLNameIDPolicy, SAMLSource
+from authentik.sources.saml.processors.metadata_parser import (
+    APPLY_POLICY_FORCE,
+    APPLY_POLICY_IF_NOT_DEVIATED,
+    IdentityProviderMetadataParser,
+)
 
 
 def _pem_to_der_b64(pem: str) -> str:
@@ -212,3 +219,188 @@ class TestIdentityProviderMetadataParserMultiCert(TestCase):
 """
         entry = IdentityProviderMetadataParser().parse(xml)
         self.assertEqual(entry.display_name, "Example IdP")
+        source = SAMLSource.objects.create(
+            name=generate_id(),
+            slug=generate_id(),
+            issuer_override=generate_id(),
+            pre_authentication_flow=self.flow,
+        )
+        applied = entry.to_idp(source)
+        self.assertEqual(applied.status, "created")
+        idp = SAMLIDP.objects.get(pk=applied.object_pk)
+        self.assertEqual(idp.name, "Example IdP")
+
+    def test_iter_entities_on_entities_descriptor(self):
+        """Yield only IdP entities from aggregate metadata."""
+        xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">
+  {_build_simple_sp_entity_descriptor(entity_id="https://sp.example.org/sp", acs_url="https://sp.example.org/acs")}
+  {_build_simple_idp_entity_descriptor(entity_id="https://idp-a.example.org/idp", sso_url="https://idp-a.example.org/sso")}
+  {_build_simple_idp_entity_descriptor(entity_id="https://idp-b.example.org/idp", sso_url="https://idp-b.example.org/sso")}
+</md:EntitiesDescriptor>
+"""
+        entries = list(IdentityProviderMetadataParser().iter_entities(xml))
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0].entity_id, "https://idp-a.example.org/idp")
+        self.assertEqual(entries[1].entity_id, "https://idp-b.example.org/idp")
+
+    def test_parse_on_entities_descriptor_single_idp(self):
+        """Parse succeeds when aggregate metadata contains exactly one IdP entity."""
+        xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">
+  {_build_simple_sp_entity_descriptor(entity_id="https://sp.example.org/sp", acs_url="https://sp.example.org/acs")}
+  {_build_simple_idp_entity_descriptor(entity_id="https://idp-only.example.org/idp", sso_url="https://idp-only.example.org/sso")}
+</md:EntitiesDescriptor>
+"""
+        entry = IdentityProviderMetadataParser().parse(xml)
+        self.assertEqual(entry.entity_id, "https://idp-only.example.org/idp")
+        self.assertEqual(entry.sso_location, "https://idp-only.example.org/sso")
+
+    def test_parse_on_entities_descriptor_multiple_idp(self):
+        """Parse fails when aggregate metadata contains multiple IdP entities."""
+        xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">
+  {_build_simple_idp_entity_descriptor(entity_id="https://idp-a.example.org/idp", sso_url="https://idp-a.example.org/sso")}
+  {_build_simple_idp_entity_descriptor(entity_id="https://idp-b.example.org/idp", sso_url="https://idp-b.example.org/sso")}
+</md:EntitiesDescriptor>
+"""
+        with self.assertRaises(ValueError):
+            IdentityProviderMetadataParser().parse(xml)
+
+    def test_compare_idp_new_entity(self):
+        """Compare marks missing SAMLIDP as creatable and non-deviated."""
+        metadata = IdentityProviderMetadataParser().parse(load_fixture("fixtures/idp-metadata.xml"))
+        source = SAMLSource.objects.create(
+            name=generate_id(),
+            slug=generate_id(),
+            issuer_override=generate_id(),
+            pre_authentication_flow=self.flow,
+        )
+
+        result = metadata.compare_idp(source)
+        self.assertFalse(result.exists)
+        self.assertTrue(result.runtime_changed)
+        self.assertTrue(result.cert_changed)
+        self.assertFalse(result.runtime_deviated)
+        self.assertFalse(result.cert_deviated)
+
+    def test_to_idp_create_and_compare(self):
+        """to_idp creates SAMLIDP and subsequent compare is unchanged."""
+        metadata = IdentityProviderMetadataParser().parse(load_fixture("fixtures/idp-metadata.xml"))
+        source = SAMLSource.objects.create(
+            name=generate_id(),
+            slug=generate_id(),
+            issuer_override=generate_id(),
+            pre_authentication_flow=self.flow,
+        )
+
+        applied = metadata.to_idp(source, create_missing_rings=True)
+        self.assertEqual(applied.status, "created")
+        self.assertIsNotNone(applied.object_pk)
+
+        idp = SAMLIDP.objects.get(pk=applied.object_pk)
+        self.assertEqual(idp.entity_id, metadata.entity_id)
+        self.assertEqual(idp.sso_url, metadata.sso_location)
+        self.assertTrue(idp.verification_kp_override)
+        self.assertFalse(idp.encryption_kp_override)
+        self.assertIsNone(idp.encryption_kp_ring)
+
+        compared = metadata.compare_idp(source, target=idp)
+        self.assertTrue(compared.exists)
+        self.assertFalse(compared.runtime_changed)
+        self.assertFalse(compared.cert_changed)
+        self.assertFalse(compared.runtime_deviated)
+        self.assertFalse(compared.cert_deviated)
+
+    def test_compare_idp_uses_stored_snapshot_for_runtime_deviation(self):
+        """Compare keeps runtime non-deviated when only incoming metadata changed."""
+        metadata = IdentityProviderMetadataParser().parse(load_fixture("fixtures/idp-metadata.xml"))
+        source = SAMLSource.objects.create(
+            name=generate_id(),
+            slug=generate_id(),
+            issuer_override=generate_id(),
+            pre_authentication_flow=self.flow,
+        )
+
+        first = metadata.to_idp(source)
+        idp = SAMLIDP.objects.get(pk=first.object_pk)
+        incoming = replace(metadata, sso_location="https://changed.example.org/sso")
+
+        compared = incoming.compare_idp(source, target=idp)
+        self.assertTrue(compared.exists)
+        self.assertTrue(compared.runtime_changed)
+        self.assertFalse(compared.cert_changed)
+        self.assertFalse(compared.runtime_deviated)
+        self.assertEqual(compared.runtime_diff_fields, [])
+
+    def test_to_idp_if_not_deviated_skips_manual_change(self):
+        """to_idp with if_not_deviated skips when current runtime is manually changed."""
+        metadata = IdentityProviderMetadataParser().parse(load_fixture("fixtures/idp-metadata.xml"))
+        source = SAMLSource.objects.create(
+            name=generate_id(),
+            slug=generate_id(),
+            issuer_override=generate_id(),
+            pre_authentication_flow=self.flow,
+        )
+
+        first = metadata.to_idp(source)
+        idp = SAMLIDP.objects.get(pk=first.object_pk)
+        idp.sso_url = "https://manually.changed.example.org/sso"
+        idp.save(update_fields=["sso_url"])
+
+        skipped = metadata.to_idp(
+            source,
+            policy=APPLY_POLICY_IF_NOT_DEVIATED,
+            target=idp,
+        )
+        self.assertEqual(skipped.status, "skipped")
+        self.assertEqual(skipped.reason, "runtime_deviated")
+
+    def test_compare_idp_detects_ring_cert_deviation(self):
+        """Compare marks cert_deviated when ring membership differs from snapshot."""
+        metadata = IdentityProviderMetadataParser().parse(self.xml)
+        source = SAMLSource.objects.create(
+            name=generate_id(),
+            slug=generate_id(),
+            issuer_override=generate_id(),
+            pre_authentication_flow=self.flow,
+        )
+        applied = metadata.to_idp(source, create_missing_rings=True)
+        idp = SAMLIDP.objects.get(pk=applied.object_pk)
+        self.assertIsNotNone(idp.verification_kp_ring)
+        idp.verification_kp_ring.sync_membership([(0, metadata.signing_cert_pems[0])])
+
+        compared = metadata.compare_idp(source, target=idp)
+        self.assertFalse(compared.runtime_deviated)
+        self.assertTrue(compared.cert_deviated)
+        self.assertIn("verification", compared.cert_diff_fields)
+
+    def test_to_idp_clears_verification_ring_when_metadata_cert_list_is_empty(self):
+        """Apply clears metadata-managed verification ring when metadata cert list is empty."""
+        metadata = IdentityProviderMetadataParser().parse(self.xml)
+        source = SAMLSource.objects.create(
+            name=generate_id(),
+            slug=generate_id(),
+            issuer_override=generate_id(),
+            pre_authentication_flow=self.flow,
+        )
+        applied = metadata.to_idp(source, create_missing_rings=True)
+        idp = SAMLIDP.objects.get(pk=applied.object_pk)
+        self.assertGreater(idp.verification_kp_ring.bindings.count(), 0)
+        self.assertIsNone(idp.encryption_kp_ring)
+
+        no_certs = replace(metadata, signing_cert_pems=[], encryption_cert_pems=[])
+        no_certs.to_idp(
+            source,
+            policy=APPLY_POLICY_FORCE,
+            target=idp,
+            create_missing_rings=True,
+        )
+        idp.refresh_from_db()
+
+        self.assertEqual(idp.verification_kp_ring.bindings.count(), 0)
+        self.assertIsNone(idp.encryption_kp_ring)
+
+        compared = no_certs.compare_idp(source, target=idp)
+        self.assertFalse(compared.cert_changed)
+        self.assertFalse(compared.cert_deviated)

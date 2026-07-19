@@ -72,6 +72,7 @@ class AssertionProcessor:
         self.provider = provider
         self.http_request = request
         self.auth_n_request = auth_n_request
+        self.cfg = getattr(auth_n_request, "cfg", None)
 
         self._issue_instant = get_time_string()
         self._assertion_id = get_random_id()
@@ -93,14 +94,48 @@ class AssertionProcessor:
             timedelta_from_string(self.provider.assertion_valid_not_on_or_after)
         )
 
+    def _effective_acs_url(self) -> str:
+        """Return the resolved ACS URL for this request."""
+        if self.cfg and getattr(self.cfg, "acs_url", None):
+            return self.cfg.acs_url
+        return self.provider.acs_url
+
+    def _effective_property_mappings(self):
+        """Return resolved property mappings for this request."""
+        if self.cfg and getattr(self.cfg, "property_mappings", None) is not None:
+            return self.cfg.property_mappings
+        return SAMLPropertyMapping.objects.filter(provider=self.provider).order_by("saml_name")
+
+    def _effective_signature_algorithm(self) -> str:
+        """Return the resolved signature algorithm for this request."""
+        if self.cfg and getattr(self.cfg, "keys", None):
+            return self.cfg.keys.signature_algorithm
+        return self.provider.signature_algorithm
+
+    def _effective_digest_algorithm(self) -> str:
+        """Return the resolved digest algorithm for this request."""
+        if self.cfg and getattr(self.cfg, "keys", None):
+            return self.cfg.keys.digest_algorithm
+        return self.provider.digest_algorithm
+
+    def _effective_signing_material(self):
+        """Return resolved signing keypair and ring for this request."""
+        if self.cfg and getattr(self.cfg, "keys", None):
+            return self.cfg.keys.signing_kp, self.cfg.keys.signing_kp_ring
+        return self.provider.signing_kp, self.provider.signing_kp_ring
+
+    def _effective_encryption_material(self):
+        """Return resolved encryption keypair and ring for this request."""
+        if self.cfg and getattr(self.cfg, "keys", None):
+            return self.cfg.keys.encryption_kp, self.cfg.keys.encryption_kp_ring
+        return self.provider.encryption_kp, self.provider.encryption_kp_ring
+
     def get_attributes(self) -> Element:
         """Get AttributeStatement Element with Attributes from Property Mappings."""
         # https://commons.lbl.gov/display/IDMgmt/Attribute+Definitions
         attribute_statement = Element(f"{{{NS_SAML_ASSERTION}}}AttributeStatement")
         user = self.http_request.user
-        for mapping in SAMLPropertyMapping.objects.filter(provider=self.provider).order_by(
-            "saml_name"
-        ):
+        for mapping in self._effective_property_mappings():
             try:
                 mapping: SAMLPropertyMapping
                 value = mapping.evaluate(
@@ -316,7 +351,7 @@ class AssertionProcessor:
         if self.auth_n_request.id:
             subject_confirmation_data.attrib["InResponseTo"] = self.auth_n_request.id
         subject_confirmation_data.attrib["NotOnOrAfter"] = self._valid_not_on_or_after
-        subject_confirmation_data.attrib["Recipient"] = self.provider.acs_url
+        subject_confirmation_data.attrib["Recipient"] = self._effective_acs_url()
         return subject
 
     def get_assertion(self) -> Element:
@@ -327,10 +362,11 @@ class AssertionProcessor:
         assertion.attrib["IssueInstant"] = self._issue_instant
         assertion.append(self.get_issuer())
 
-        signing = bool(self.provider.signing_kp) or bool(self.provider.signing_kp_ring)
+        signing_kp, signing_kp_ring = self._effective_signing_material()
+        signing = bool(signing_kp) or bool(signing_kp_ring)
         if signing and self.provider.sign_assertion:
             sign_algorithm_transform = SIGN_ALGORITHM_TRANSFORM_MAP.get(
-                self.provider.signature_algorithm, xmlsec.constants.TransformRsaSha1
+                self._effective_signature_algorithm(), xmlsec.constants.TransformRsaSha1
             )
             signature = xmlsec.template.create(
                 assertion,
@@ -352,17 +388,18 @@ class AssertionProcessor:
         response = Element(f"{{{NS_SAML_PROTOCOL}}}Response", nsmap=NS_MAP)
         response.attrib["Version"] = "2.0"
         response.attrib["IssueInstant"] = self._issue_instant
-        response.attrib["Destination"] = self.provider.acs_url
+        response.attrib["Destination"] = self._effective_acs_url()
         response.attrib["ID"] = self._response_id
         if self.auth_n_request.id:
             response.attrib["InResponseTo"] = self.auth_n_request.id
 
         response.append(self.get_issuer())
 
-        signing_pem = pick_cert_pem(kp=self.provider.signing_kp, ring=self.provider.signing_kp_ring)
+        signing_kp, signing_kp_ring = self._effective_signing_material()
+        signing_pem = pick_cert_pem(kp=signing_kp, ring=signing_kp_ring)
         if signing_pem and self.provider.sign_response:
             sign_algorithm_transform = SIGN_ALGORITHM_TRANSFORM_MAP.get(
-                self.provider.signature_algorithm, xmlsec.constants.TransformRsaSha1
+                self._effective_signature_algorithm(), xmlsec.constants.TransformRsaSha1
             )
             signature = xmlsec.template.create(
                 response,
@@ -382,7 +419,7 @@ class AssertionProcessor:
     def _sign(self, element: _Element):
         """Sign an XML element based on the providers' configured signing settings"""
         digest_algorithm_transform = DIGEST_ALGORITHM_TRANSLATION_MAP.get(
-            self.provider.digest_algorithm, xmlsec.constants.TransformSha1
+            self._effective_digest_algorithm(), xmlsec.constants.TransformSha1
         )
         xmlsec.tree.add_ids(element, ["ID"])
         signature_node = xmlsec.tree.find_node(element, xmlsec.constants.NodeSignature)
@@ -396,9 +433,10 @@ class AssertionProcessor:
         key_info = xmlsec.template.ensure_key_info(signature_node)
         xmlsec.template.add_x509_data(key_info)
 
+        signing_kp, signing_kp_ring = self._effective_signing_material()
         key_pem, cert_pem = pick_private_key_pem(
-            kp=self.provider.signing_kp,
-            ring=self.provider.signing_kp_ring,
+            kp=signing_kp,
+            ring=signing_kp_ring,
         )
         if not key_pem or not cert_pem:
             raise InvalidSignature()
@@ -421,9 +459,13 @@ class AssertionProcessor:
         # Remove the original element from the tree since we're replacing it with encrypted version
         parent.remove(element)
 
+        encryption_kp, encryption_kp_ring = self._effective_encryption_material()
         encryption_pem = pick_cert_pem(
-            kp=self.provider.encryption_kp, ring=self.provider.encryption_kp_ring
+            kp=encryption_kp,
+            ring=encryption_kp_ring,
         )
+        if not encryption_pem:
+            raise InvalidEncryption()
         manager = xmlsec.KeysManager()
         key = xmlsec.Key.from_memory(
             encryption_pem,
@@ -456,12 +498,14 @@ class AssertionProcessor:
         """Build string XML Response and sign if signing is enabled."""
         root_response = self.get_response()
         # Sign assertion first (before encryption)
-        signing = bool(self.provider.signing_kp) or bool(self.provider.signing_kp_ring)
+        signing_kp, signing_kp_ring = self._effective_signing_material()
+        signing = bool(signing_kp) or bool(signing_kp_ring)
         if signing and self.provider.sign_assertion:
             assertion = root_response.xpath("//saml:Assertion", namespaces=NS_MAP)[0]
             self._sign(assertion)
         # Encrypt assertion (this replaces Assertion with EncryptedAssertion)
-        encryption = bool(self.provider.encryption_kp) or bool(self.provider.encryption_kp_ring)
+        encryption_kp, encryption_kp_ring = self._effective_encryption_material()
+        encryption = bool(encryption_kp) or bool(encryption_kp_ring)
         if encryption:
             assertion = root_response.xpath("//saml:Assertion", namespaces=NS_MAP)[0]
             self._encrypt(assertion, root_response)

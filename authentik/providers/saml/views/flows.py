@@ -63,6 +63,11 @@ class SAMLFlowFinalView(ChallengeStageView):
             return self.executor.stage_invalid()
 
         auth_n_request: AuthNRequest = self.executor.plan.context[PLAN_CONTEXT_SAML_AUTH_N_REQUEST]
+        cfg = getattr(auth_n_request, "cfg", None)
+        target_binding = (
+            getattr(cfg, "sp_binding", None) or auth_n_request.sp_binding or provider.sp_binding
+        )
+        target_acs_url = getattr(cfg, "acs_url", None) or auth_n_request.acs_url or provider.acs_url
         try:
             processor = AssertionProcessor(provider, request, auth_n_request)
             response = processor.build_response()
@@ -104,7 +109,7 @@ class SAMLFlowFinalView(ChallengeStageView):
             flow=self.executor.plan.flow_pk,
         ).from_http(self.request)
 
-        if provider.sp_binding == SAMLBindings.POST:
+        if target_binding == SAMLBindings.POST:
             form_attrs = delete_none_values(
                 {
                     REQUEST_KEY_SAML_RESPONSE: nice64(response),
@@ -119,11 +124,11 @@ class SAMLFlowFinalView(ChallengeStageView):
                         PLAN_CONTEXT_TITLE,
                         _("Redirecting to {app}...".format_map({"app": application.name})),
                     ),
-                    "url": provider.acs_url,
+                    "url": target_acs_url,
                     "attrs": form_attrs,
                 },
             )
-        if provider.sp_binding == SAMLBindings.REDIRECT:
+        if target_binding == SAMLBindings.REDIRECT:
             Event.log_deprecation(
                 DEPRECATION_SP_BINDING_REDIRECT,
                 (
@@ -142,12 +147,12 @@ class SAMLFlowFinalView(ChallengeStageView):
                 return HttpChallengeResponse(
                     RedirectChallenge(
                         instance={
-                            "to": f"{provider.acs_url}?{querystring}",
+                            "to": f"{target_acs_url}?{querystring}",
                             "final_redirect": True,
                         }
                     )
                 )
-            return redirect(f"{provider.acs_url}?{querystring}")
+            return redirect(f"{target_acs_url}?{querystring}")
         return bad_request_message(request, "Invalid sp_binding specified")
 
     def get_challenge(self, *args, **kwargs) -> Challenge:
