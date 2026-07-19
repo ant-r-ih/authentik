@@ -40,8 +40,8 @@ KEYCLOAK_ACS_URL = "http://localhost:9000/source/saml/keycloak/acs/"
 SHIBBOLETH_ACS_URL = "https://sp.example.org:9443/source/saml/shibboleth-post/acs/"
 SHIBBOLETH_TRANSIENT_ACS_URL = "https://sp.example.org:10443/Shibboleth.sso/SAML2/POST"
 
+
 def _ring_add_keypairs(*, ring: CertificateKeyPairRing, keypairs: list[CertificateKeyPair]) -> None:
-    """Add keypairs to a ring in deterministic priority order."""
     for i, kp in enumerate(keypairs):
         CertificateKeyPairRingBinding.objects.create(ring=ring, keypair=kp, order=i)
 
@@ -760,6 +760,7 @@ class TestResponseProcessor(TestCase):
     @freeze_time("2025-11-22T11:53:00Z")
     def test_transient_simple(self):
         """Test SAML transient NameID without stable attributes."""
+        self.source.issuer_override = "https://sp.example.org/source/saml/shibboleth-post/metadata/"
         request = self.factory.post(
             "/",
             data={
@@ -770,7 +771,9 @@ class TestResponseProcessor(TestCase):
         )
 
         parser = ResponseProcessor(self.source, request)
-        with patch.object(SAMLSource, "build_full_url", return_value=SHIBBOLETH_ACS_URL):
+        with patch(
+            "authentik.sources.saml.processors.response.reverse", return_value=SHIBBOLETH_ACS_URL
+        ):
             parser.parse()
         sfm = parser.prepare_flow_manager()
 
@@ -794,6 +797,7 @@ class TestResponseProcessor(TestCase):
     @freeze_time("2025-11-22T11:50:00Z")
     def test_persistent(self):
         """Test SAML persistent NameID."""
+        self.source.issuer_override = "https://sp.example.org/source/saml/shibboleth-post/metadata/"
         request = self.factory.post(
             "/",
             data={
@@ -804,7 +808,9 @@ class TestResponseProcessor(TestCase):
         )
 
         parser = ResponseProcessor(self.source, request)
-        with patch.object(SAMLSource, "build_full_url", return_value=SHIBBOLETH_ACS_URL):
+        with patch(
+            "authentik.sources.saml.processors.response.reverse", return_value=SHIBBOLETH_ACS_URL
+        ):
             parser.parse()
         sfm = parser.prepare_flow_manager()
         self.assertEqual(
@@ -823,6 +829,7 @@ class TestResponseProcessor(TestCase):
     @freeze_time("2025-11-22T11:50:00Z")
     def test_persistent_match_email(self):
         """Test persistent NameID with email matching."""
+        self.source.issuer_override = "https://sp.example.org/source/saml/shibboleth-post/metadata/"
         request = self.factory.post(
             "/",
             data={
@@ -834,7 +841,9 @@ class TestResponseProcessor(TestCase):
 
         self.source.user_matching_mode = SourceUserMatchingModes.EMAIL_LINK
         parser = ResponseProcessor(self.source, request)
-        with patch.object(SAMLSource, "build_full_url", return_value=SHIBBOLETH_ACS_URL):
+        with patch(
+            "authentik.sources.saml.processors.response.reverse", return_value=SHIBBOLETH_ACS_URL
+        ):
             parser.parse()
         sfm = parser.prepare_flow_manager()
         self.assertEqual(
@@ -853,6 +862,7 @@ class TestResponseProcessor(TestCase):
     @freeze_time("2025-11-22T11:50:00Z")
     def test_persistent_match_eppn(self):
         """Test persistent NameID with username matching."""
+        self.source.issuer_override = "https://sp.example.org/source/saml/shibboleth-post/metadata/"
         request = self.factory.post(
             "/",
             data={
@@ -864,7 +874,9 @@ class TestResponseProcessor(TestCase):
 
         self.source.user_matching_mode = SourceUserMatchingModes.USERNAME_LINK
         parser = ResponseProcessor(self.source, request)
-        with patch.object(SAMLSource, "build_full_url", return_value=SHIBBOLETH_ACS_URL):
+        with patch(
+            "authentik.sources.saml.processors.response.reverse", return_value=SHIBBOLETH_ACS_URL
+        ):
             parser.parse()
         sfm = parser.prepare_flow_manager()
         self.assertEqual(sfm.identifier, "LHPJHTQTRBOHWQRFZIYHL7PASE67UJVM")
@@ -895,7 +907,7 @@ class TestResponseProcessor(TestCase):
         with self.assertRaisesMessage(ValueError, "XML document contains a DOCTYPE declaration"):
             ResponseProcessor(self.source, request).parse()
 
-    @freeze_time("2022-10-14T14:16:40Z")
+    @freeze_time("2024-01-18T06:00:00Z")
     def test_verification_assertion_with_ring(self):
         """Test verifying signature inside assertion via verification_kp_ring."""
         cert_pem = load_fixture("fixtures/signature_cert.pem")
@@ -920,7 +932,7 @@ class TestResponseProcessor(TestCase):
 
         ResponseProcessor(self.source, request).parse()
 
-    @freeze_time("2014-07-17T01:02:18Z")
+    @freeze_time("2024-01-18T06:00:00Z")
     def test_verification_response_with_ring(self):
         """Test verifying signature inside response via verification_kp_ring."""
         cert_pem = load_fixture("fixtures/signature_cert.pem")
@@ -945,7 +957,7 @@ class TestResponseProcessor(TestCase):
 
         ResponseProcessor(self.source, request).parse()
 
-    @freeze_time("2014-07-17T01:02:18Z")
+    @freeze_time("2024-01-18T06:00:00Z")
     def test_verification_ring_try_order(self):
         """Ring should try certs in order until one verifies."""
         good = load_fixture("fixtures/signature_cert.pem")
@@ -971,7 +983,7 @@ class TestResponseProcessor(TestCase):
 
         ResponseProcessor(self.source, request).parse()
 
-    @freeze_time("2024-08-07T15:48:09.325Z")
+    @freeze_time("2024-08-07T15:48:10Z")
     def test_encrypted_correct_with_ring(self):
         """Decrypt using encryption_kp_ring (no encryption_kp)."""
         key_pem = load_fixture("fixtures/encrypted-key.pem")
@@ -1003,7 +1015,7 @@ class TestResponseProcessor(TestCase):
         ):
             ResponseProcessor(self.source, request).parse()
 
-    @freeze_time("2024-08-07T15:48:09.325Z")
+    @freeze_time("2024-08-07T15:48:10Z")
     def test_encrypted_ring_try_order(self):
         """Ring should try private keys in order until one decrypts."""
         bad = create_test_cert()  # has a private key but wrong one for this fixture

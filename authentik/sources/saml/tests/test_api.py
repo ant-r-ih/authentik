@@ -1,46 +1,14 @@
-"""SAML Source API tests"""
+"""SAML Source API Tests"""
 
 from tempfile import TemporaryFile
-from unittest import skipIf
 
-from cryptography.hazmat.backends.openssl.backend import backend
 from django.urls import reverse
-from lxml import etree  # nosec
 from rest_framework.test import APITestCase
 
-from authentik.common.saml.constants import NS_MAP
-from authentik.core.tests.utils import create_test_admin_user, create_test_cert, create_test_flow
-from authentik.crypto.builder import PrivateKeyAlg
+from authentik.core.tests.utils import create_test_admin_user, create_test_flow
 from authentik.lib.generators import generate_id
-from authentik.lib.tests.utils import load_fixture
-from authentik.lib.xml import lxml_from_string
-from authentik.sources.saml.models import SAMLSource
-
-SIGNING_KEY_DESCRIPTORS = "//md:IDPSSODescriptor/md:KeyDescriptor[@use='signing']"
-
-
-def cert_body(certificate: str) -> str:
-    """A certificate's base64 body, without PEM armour or whitespace"""
-    return "".join(part for part in certificate.split() if "-----" not in part)
-
-
-def signing_cert_bodies(metadata: str) -> list[str]:
-    """The IdP signing certificates listed in `metadata`, in order"""
-    return [
-        cert_body(text)
-        for text in lxml_from_string(metadata.encode()).xpath(
-            f"{SIGNING_KEY_DESCRIPTORS}//ds:X509Certificate/text()", namespaces=NS_MAP
-        )
-    ]
-
-
-def without_first_signing_cert(metadata: str) -> str:
-    """`metadata` after the IdP finished its rollover and dropped its first signing certificate"""
-    root = lxml_from_string(metadata.encode())
-    old = root.xpath(SIGNING_KEY_DESCRIPTORS, namespaces=NS_MAP)[0]
-    old.getparent().remove(old)
-    return etree.tostring(root).decode()
-
+from authentik.providers.saml.models import SAMLIDP
+from authentik.sources.saml.models import SAMLNameIDPolicy, SAMLSource
 
 IDP_METADATA_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <EntityDescriptor
@@ -91,9 +59,7 @@ hXXBo4Lf7ivi33g=
 """
 
 
-class TestSAMLSourceMetadataAPI(APITestCase):
-    """SAML Source metadata import API tests"""
-
+class TestSAMLSourceAPI(APITestCase):
     def setUp(self) -> None:
         super().setUp()
         self.user = create_test_admin_user()
@@ -151,58 +117,6 @@ class TestSAMLSourceMetadataAPI(APITestCase):
         self.assertEqual(source.sso_url, "https://idp.example.org/idp/profile/SAML2/Redirect/SSO")
         self.assertEqual(source.slo_url, "https://idp.example.org/idp/profile/SAML2/Redirect/SLO")
 
-    def _import_metadata(self, metadata: str, **data):
-        with TemporaryFile() as file:
-            file.write(metadata.encode())
-            file.seek(0)
-            return self.client.post(
-                reverse("authentik_api:samlsource-import-metadata"),
-                {"file": file, **data},
-                format="multipart",
-            )
-
-    def test_import_multi_cert_creates_keyring(self):
-        """Test the back- and front-channel signing certificates of a Shibboleth IdP are both
-        trusted, in metadata order"""
-        metadata = load_fixture("fixtures/idp-metadata.xml")
-        response = self._import_metadata(
-            metadata, name=generate_id(), pre_authentication_flow=create_test_flow().pk
-        )
-        self.assertEqual(response.status_code, 201)
-        source = SAMLSource.objects.get(slug=response.json()["slug"])
-
-        self.assertIsNone(source.verification_kp)
-        bindings = list(source.verification_kp_ring.ordered_bindings())
-        self.assertEqual([binding.order for binding in bindings], [0, 1])
-        self.assertEqual(
-            [cert_body(binding.keypair.certificate_data) for binding in bindings],
-            signing_cert_bodies(metadata),
-        )
-        # The IdP's encryption certificate is of no use to a source
-        self.assertIsNone(source.encryption_kp_ring)
-
-    def test_import_existing_source_after_rollover(self):
-        """Test re-importing metadata without the old certificate leaves only the new one"""
-        metadata = load_fixture("fixtures/idp-metadata.xml")
-        response = self._import_metadata(
-            metadata, name=generate_id(), pre_authentication_flow=create_test_flow().pk
-        )
-        source = SAMLSource.objects.get(slug=response.json()["slug"])
-        ring = source.verification_kp_ring
-
-        response = self._import_metadata(
-            without_first_signing_cert(metadata), source=source.pk, name=source.name
-        )
-        self.assertEqual(response.status_code, 200)
-        source.refresh_from_db()
-
-        self.assertEqual(source.verification_kp_ring, ring)
-        bindings = list(source.verification_kp_ring.ordered_bindings())
-        self.assertEqual(
-            [cert_body(binding.keypair.certificate_data) for binding in bindings],
-            signing_cert_bodies(metadata)[1:],
-        )
-
     def test_import_failed_invalid_xml(self):
         with TemporaryFile() as metadata:
             metadata.write(b"invalid")
@@ -218,60 +132,121 @@ class TestSAMLSourceMetadataAPI(APITestCase):
             )
         self.assertEqual(400, response.status_code)
 
-
-class TestSAMLSourceAPI(APITestCase):
-    """SAML Source API tests"""
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.client.force_login(create_test_admin_user())
-
-    @skipIf(backend._fips_enabled, "The FIPS provider has no Ed25519")
-    def test_create_validate_unsupported_key_type(self):
-        """Test validation rejects key types without an XML-DSIG transform (Ed25519)"""
-        ed25519_cert = create_test_cert(PrivateKeyAlg.ED25519)
-
+    def test_identity_providers_preview_entities(self):
+        """Test preview endpoint for identity providers with DTO payload."""
+        source = SAMLSource.objects.create(
+            name=generate_id(),
+            slug=generate_id(),
+            issuer_override=generate_id(),
+            sso_url="https://idp.example.org/sso",
+            pre_authentication_flow=create_test_flow(),
+        )
+        existing = SAMLIDP.objects.create(
+            parent=source,
+            name=generate_id(),
+            entity_id="https://idp-existing.example.org/idp",
+            enabled=True,
+            sso_url="https://idp-existing.example.org/sso",
+            binding_type="redirect",
+        )
         response = self.client.post(
-            reverse("authentik_api:samlsource-list"),
+            reverse(
+                "authentik_api:samlsource-identity-providers-preview",
+                kwargs={"slug": source.slug},
+            ),
             data={
-                "name": generate_id(),
-                "slug": generate_id(),
-                "sso_url": "http://localhost",
-                "pre_authentication_flow": create_test_flow().pk,
-                "signing_kp": ed25519_cert.pk,
-                "verification_kp": ed25519_cert.pk,
-                "encryption_kp": ed25519_cert.pk,
-                "signed_assertion": True,
+                "input_mode": "entities",
+                "entities": [
+                    {
+                        "entity_id": existing.entity_id,
+                        "display_name": "Existing IdP Display",
+                        "sso_binding": "redirect",
+                        "sso_location": existing.sso_url,
+                        "want_authn_requests_signed": False,
+                        "name_id_policy": SAMLNameIDPolicy.UNSPECIFIED,
+                    }
+                ],
             },
+            format="json",
         )
-        self.assertEqual(response.status_code, 400)
-        message = (
-            "Key type Ed25519 is not supported. Supported key types are: RSA, Elliptic Curve, DSA."
-        )
-        self.assertJSONEqual(
-            response.content,
-            {
-                "signing_kp": [message],
-                "verification_kp": [message],
-                "encryption_kp": [message],
-            },
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 1)
+        self.assertEqual(response.json()["results"][0]["compare"]["entity_id"], existing.entity_id)
+        self.assertEqual(
+            response.json()["results"][0]["metadata"]["display_name"],
+            "Existing IdP Display",
         )
 
-    def test_create_supported_key_type(self):
-        """Test an RSA keypair is accepted on every keypair field"""
-        cert = create_test_cert()
-
+    def test_identity_providers_apply_entities(self):
+        """Test apply endpoint for identity providers with DTO payload."""
+        source = SAMLSource.objects.create(
+            name=generate_id(),
+            slug=generate_id(),
+            issuer_override=generate_id(),
+            sso_url="https://idp.example.org/sso",
+            pre_authentication_flow=create_test_flow(),
+        )
         response = self.client.post(
-            reverse("authentik_api:samlsource-list"),
+            reverse(
+                "authentik_api:samlsource-identity-providers-apply",
+                kwargs={"slug": source.slug},
+            ),
             data={
-                "name": generate_id(),
-                "slug": generate_id(),
-                "sso_url": "http://localhost",
-                "pre_authentication_flow": create_test_flow().pk,
-                "signing_kp": cert.pk,
-                "verification_kp": cert.pk,
-                "encryption_kp": cert.pk,
-                "signed_assertion": True,
+                "input_mode": "entities",
+                "entities": [
+                    {
+                        "entity_id": "https://idp-new.example.org/idp",
+                        "display_name": "New IdP Display",
+                        "sso_binding": "redirect",
+                        "sso_location": "https://idp-new.example.org/sso",
+                        "want_authn_requests_signed": False,
+                        "name_id_policy": SAMLNameIDPolicy.UNSPECIFIED,
+                    }
+                ],
             },
+            format="json",
         )
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["summary"]["created"], 1)
+        created = source.identity_providers.get(entity_id="https://idp-new.example.org/idp")
+        self.assertEqual(created.name, "New IdP Display")
+        self.assertEqual(created.sso_url, "https://idp-new.example.org/sso")
+
+    def test_identity_provider_nested_crud(self):
+        """Test nested list/detail/patch/delete endpoints for SAMLIDP."""
+        source = SAMLSource.objects.create(
+            name=generate_id(),
+            slug=generate_id(),
+            issuer_override=generate_id(),
+            sso_url="https://idp.example.org/sso",
+            pre_authentication_flow=create_test_flow(),
+        )
+        idp = SAMLIDP.objects.create(
+            parent=source,
+            name="before",
+            entity_id="https://idp-crud.example.org/idp",
+            enabled=True,
+            sso_url="https://idp-crud.example.org/sso",
+            binding_type="redirect",
+        )
+        list_response = self.client.get(
+            reverse("authentik_api:samlsource-identity-providers", kwargs={"slug": source.slug}),
+        )
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.json()["results"]), 1)
+
+        detail_url = reverse(
+            "authentik_api:samlsource-identity-provider",
+            kwargs={"slug": source.slug, "idp_id": idp.pk},
+        )
+        detail_response = self.client.get(detail_url)
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["entity_id"], idp.entity_id)
+
+        patch_response = self.client.patch(detail_url, data={"name": "after"}, format="json")
+        self.assertEqual(patch_response.status_code, 200)
+        self.assertEqual(patch_response.json()["name"], "after")
+
+        delete_response = self.client.delete(detail_url)
+        self.assertEqual(delete_response.status_code, 204)
+        self.assertFalse(source.identity_providers.filter(pk=idp.pk).exists())

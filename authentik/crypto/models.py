@@ -269,6 +269,9 @@ class CertificateKeyPairRing(SerializerModel, ManagedModel, CreatedUpdatedModel)
     def ordered_bindings(self):
         return self.bindings.select_related("keypair").order_by("order", "keypair__kp_uuid")
 
+    def ordered_keypairs(self):
+        return [b.keypair for b in self.ordered_bindings()]
+
     @transaction.atomic
     def sync_membership(self, items: list[tuple[int, str]]) -> None:
         """Replace membership with provided ordered PEM cert list."""

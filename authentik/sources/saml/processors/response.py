@@ -41,6 +41,7 @@ from authentik.core.sources.flow_manager import SourceFlowManager
 from authentik.crypto.keyring import candidate_cert_pems, candidate_private_key_pems
 from authentik.lib.utils.time import timedelta_from_string
 from authentik.lib.xml import lxml_from_string
+from authentik.providers.saml.resolve import build_idp_config, peek_issuer
 from authentik.sources.saml.exceptions import (
     InvalidEncryption,
     InvalidSignature,
@@ -69,6 +70,8 @@ if TYPE_CHECKING:
 CACHE_SEEN_ASSERTION_ID = "goauthentik.io/sources/saml/seen_assertion/%s/%s"
 # 24 hours, longer than the validity of most assertions
 CACHE_SEEN_ASSERTION_TIMEOUT = 60 * 60 * 24
+# Seen Response IDs per Source, used to detect replays of IdP-initiated Responses
+CACHE_SEEN_REQUEST_ID = "authentik_saml_seen_ids_%s"
 SAML_SUBJECT_CONFIRMATION_METHOD_BEARER = "urn:oasis:names:tc:SAML:2.0:cm:bearer"
 
 
@@ -83,10 +86,13 @@ class ResponseProcessor:
     _http_request: HttpRequest
 
     _assertion: _Element | None = None
+    _idp = None
+    _cfg = None
 
     def __init__(self, source: SAMLSource, request: HttpRequest):
         self._source = source
         self._http_request = request
+        self._cfg = build_idp_config(self._source, None)
 
     def parse(self):
         """Check if `request` contains SAML Response data, parse and validate it."""
@@ -97,22 +103,26 @@ class ResponseProcessor:
         # Check if response is compressed, b64 decode it
         self._root_xml = b64decode(raw_response.encode())
         self._root = lxml_from_string(self._root_xml)
+        issuer = peek_issuer(self._root)
+        self._idp = self._source.get_idp(issuer)
+        self._cfg = build_idp_config(self._source, self._idp)
 
         # Certificates to verify signatures with, the single keypair first, then the ring
         verifier_pems = candidate_cert_pems(
-            kp=self._source.verification_kp,
-            ring=getattr(self._source, "verification_kp_ring", None),
+            kp=self._cfg.keys.verification_kp,
+            ring=self._cfg.keys.verification_kp_ring,
         )
 
         # Verify response signature BEFORE decryption (signature covers encrypted content)
-        if verifier_pems and self._source.signed_response:
+        if verifier_pems and self._cfg.signed_response:
             self._verify_response_signature(verifier_pems)
 
-        if self._source.encryption_kp or getattr(self._source, "encryption_kp_ring", None):
+        # Decrypt (may need to try multiple private keys)
+        if self._cfg.keys.encryption_kp or self._cfg.keys.encryption_kp_ring:
             self._decrypt_response()
 
         # Verify assertion signature AFTER decryption (signature is inside encrypted content)
-        if verifier_pems and self._source.signed_assertion:
+        if verifier_pems and self._cfg.signed_assertion:
             self._verify_assertion_signature(verifier_pems)
 
         self._verify_request_id()
@@ -140,8 +150,8 @@ class ResponseProcessor:
         # The single keypair first, then the ring
         last_exc: xmlsec.Error | None = None
         for key_pem, _cert_pem in candidate_private_key_pems(
-            kp=self._source.encryption_kp,
-            ring=getattr(self._source, "encryption_kp_ring", None),
+            kp=self._cfg.keys.encryption_kp,
+            ring=self._cfg.keys.encryption_kp_ring,
         ):
             manager = xmlsec.KeysManager()
             manager.add_key(xmlsec.Key.from_memory(key_pem, xmlsec.constants.KeyDataFormatPem))
@@ -254,7 +264,12 @@ class ResponseProcessor:
         self._assertion = assertion
 
     def _verify_request_id(self):
-        if self._source.allow_idp_initiated:
+        if self._cfg.allow_idp_initiated:
+            seen_ids = cache.get(CACHE_SEEN_REQUEST_ID % self._source.pk, [])
+            if self._root.attrib["ID"] in seen_ids:
+                raise SuspiciousOperation("Replay attack detected")
+            seen_ids.append(self._root.attrib["ID"])
+            cache.set(CACHE_SEEN_REQUEST_ID % self._source.pk, seen_ids)
             return
         # The Response and the assertion can both name the request that they answer. Read
         # both, as only the value inside the assertion is covered by the signature. The
@@ -445,10 +460,10 @@ class ResponseProcessor:
         # The Format attribute is optional, and defaults to unspecified
         name_id_format = name_id_el.attrib.get("Format", SAML_NAME_ID_FORMAT_UNSPECIFIED)
         # Sanity check, show a warning if NameIDPolicy doesn't match what we go
-        if self._source.name_id_policy != name_id_format:
+        if self._cfg.name_id_policy != name_id_format:
             LOGGER.warning(
                 "NameID from IdP doesn't match our policy",
-                expected=self._source.name_id_policy,
+                expected=self._cfg.name_id_policy,
                 got=name_id_format,
             )
         attributes = getattr(self, "_saml_attributes", None)

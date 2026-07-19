@@ -322,6 +322,12 @@ class SAMLSource(Source):
             return static("authentik/sources/saml/light.png")
         return icon
 
+    def get_idp(self, entity_id: str | None):
+        """Return enabled SAMLIDP for the given entity_id."""
+        if not entity_id or not self._is_pk_set():
+            return None
+        return self.identity_providers.filter(enabled=True, entity_id=entity_id).first()
+
     def ui_login_button(self, request: HttpRequest) -> UILoginButton:
         return UILoginButton(
             challenge=RedirectChallenge(
