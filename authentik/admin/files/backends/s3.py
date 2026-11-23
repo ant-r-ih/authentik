@@ -297,6 +297,8 @@ class S3Backend(ManageableBackend):
         if "r" not in mode:
             raise ValueError("S3Backend open_file_stream only supports read modes")
 
+        from botocore.exceptions import ClientError
+
         with SpooledTemporaryFile(max_size=5 * 1024 * 1024, suffix=".S3ReadFile") as file:
             try:
                 self.client.download_fileobj(
