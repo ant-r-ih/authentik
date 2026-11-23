@@ -256,7 +256,7 @@ class DSView(View):
             </div>
 
             <ul style="list-style:none; padding:0; margin:0;">
-              {''.join(rows) if rows else '<li>No enabled IdPs.</li>'}
+              {"".join(rows) if rows else "<li>No enabled IdPs.</li>"}
             </ul>
           </body>
         </html>

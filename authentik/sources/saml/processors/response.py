@@ -441,7 +441,7 @@ class ResponseProcessor:
         _format = name_id_el.attrib.get("Format", SAML_NAME_ID_FORMAT_UNSPECIFIED)
         if _format == SAML_NAME_ID_FORMAT_EMAIL:
             return {"email": name_id}
-        if _format in [SAML_NAME_ID_FORMAT_PERSISTENT, SAML_NAME_ID_FORMAT_TRANSIENT]:
+        if _format == SAML_NAME_ID_FORMAT_PERSISTENT:
             return {"username": name_id}
         if _format == SAML_NAME_ID_FORMAT_X509:
             # This attribute is statically set by the LDAP source

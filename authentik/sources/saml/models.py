@@ -260,11 +260,9 @@ class SAMLSource(Source):
     def property_mapping_type(self) -> type[PropertyMapping]:
         return SAMLSourcePropertyMapping
 
-    def extract_attributes(self, root: _Element, assertion: _Element | None = None) -> dict:
+    def extract_attributes(self, root: _Element, assertion: _Element | None) -> dict:
         """Extract and normalize SAML attributes from an assertion."""
         attributes = {}
-        if assertion is None:
-            assertion = root.find(f"{{{NS_SAML_ASSERTION}}}Assertion")
         if assertion is None:
             raise ValueError("Assertion element not found")
         attribute_statement = assertion.find(f"{{{NS_SAML_ASSERTION}}}AttributeStatement")

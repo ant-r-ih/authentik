@@ -1,5 +1,6 @@
 """SAML Source tests"""
 
+import re
 from base64 import b64encode
 from unittest.mock import MagicMock, patch
 
@@ -785,6 +786,47 @@ class TestResponseProcessor(TestCase):
                 "username": username,
                 "path": self.source.get_user_path(),
                 "urn:oid:1.3.6.1.4.1.25178.1.2.9": "example.org",
+                "attributes": {
+                    "goauthentik.io/user/delete-on-logout": True,
+                    "goauthentik.io/user/expires": 1763898780.0,
+                    "goauthentik.io/user/generated": True,
+                    "goauthentik.io/user/sources": [self.source.name],
+                },
+            },
+        )
+
+    @freeze_time("2025-11-22T11:53:00Z")
+    def test_transient_no_attribute_statement(self):
+        """Test SAML transient NameID without an AttributeStatement gets a temporary user"""
+        response = load_fixture("fixtures/response_transient_simple.xml")
+        response = re.sub(
+            r"<saml2:AttributeStatement>.*?</saml2:AttributeStatement>",
+            "",
+            response,
+            flags=re.S,
+        )
+        self.assertNotIn("AttributeStatement", response)
+        request = self.factory.post(
+            "/",
+            data={"SAMLResponse": b64encode(response.encode()).decode()},
+        )
+
+        self.source.issuer_override = "https://sp.example.org/source/saml/shibboleth-post/metadata/"
+        parser = ResponseProcessor(self.source, request)
+        with patch(
+            "authentik.sources.saml.processors.response.reverse",
+            return_value=SHIBBOLETH_ACS_URL,
+        ):
+            parser.parse()
+        sfm = parser.prepare_flow_manager()
+
+        username = "_ef5783d83c0d4147212322815d7e4064"
+        self.assertEqual(sfm.identifier, username)
+        self.assertEqual(
+            sfm.user_properties,
+            {
+                "username": username,
+                "path": self.source.get_user_path(),
                 "attributes": {
                     "goauthentik.io/user/delete-on-logout": True,
                     "goauthentik.io/user/expires": 1763898780.0,
