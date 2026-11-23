@@ -47,6 +47,11 @@ from authentik.sources.saml.models import (
 
 LOGGER = get_logger()
 
+# How endpoints are picked from metadata. Single-entity metadata follows the binding order
+# (as upstream); aggregate (federation) metadata prefers endpoints marked isDefault.
+ENDPOINT_POLICY_BINDING = "binding"
+ENDPOINT_POLICY_IS_DEFAULT = "is_default"
+
 __all__ = [
     "ServiceProviderMetadata",
     "IdentityProviderMetadata",
@@ -65,7 +70,7 @@ __all__ = [
 ]
 
 """Allowed binding tokens for SP ACS/SLS selection."""
-_ALLOWED_ACS = {SAMLBindings.POST}  # keep strict for now
+_ALLOWED_ACS = {SAMLBindings.POST, SAMLBindings.REDIRECT}
 _ALLOWED_SLS = {SAMLBindings.POST, SAMLBindings.REDIRECT}
 _ALLOWED_SSO = {SAMLBindings.POST, SAMLBindings.REDIRECT}
 _ALLOWED_SLO = {SAMLBindings.POST, SAMLBindings.REDIRECT}
@@ -109,18 +114,22 @@ def build_sp_snapshot(entity: etree._Element) -> dict[str, Any]:
 def build_sp_runtime_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Deterministically derive SP runtime defaults from snapshot using policy."""
     snap = snapshot or {}
+    default_first = snap.get("endpoint_policy") == ENDPOINT_POLICY_IS_DEFAULT
 
     acs = (
         mx.pick_preferred_service(
             snap.get("acs"),
+            # The ACS keeps upstream's binding order (POST first) on both paths
+            default_first=False,
             allowed_bindings=_ALLOWED_ACS,
-            prefer_order=(SAMLBindings.POST,),
+            prefer_order=_PREFER_BINDINGS,
         )
         or {}
     )
     sls = (
         mx.pick_preferred_service(
             snap.get("sls"),
+            default_first=default_first,
             allowed_bindings=_ALLOWED_SLS,
             prefer_order=_PREFER_BINDINGS,
         )
@@ -192,10 +201,12 @@ def build_idp_snapshot(entity: etree._Element) -> dict[str, Any]:
 def build_idp_runtime_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Derive IdP runtime defaults from snapshot using policy."""
     snap = snapshot or {}
+    default_first = snap.get("endpoint_policy") == ENDPOINT_POLICY_IS_DEFAULT
 
     sso = (
         mx.pick_preferred_service(
             snap.get("sso"),
+            default_first=default_first,
             allowed_bindings=_ALLOWED_SSO,
             prefer_order=_PREFER_BINDINGS,
         )
@@ -204,6 +215,7 @@ def build_idp_runtime_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     slo = (
         mx.pick_preferred_service(
             snap.get("slo"),
+            default_first=default_first,
             allowed_bindings=_ALLOWED_SLO,
             prefer_order=_PREFER_BINDINGS,
         )
@@ -529,15 +541,16 @@ class ServiceProviderMetadataParser:
             out.append(item)
         return out
 
-    def _parse_entity(self, entity: etree._Element) -> ServiceProviderMetadata:
+    def _parse_entity(
+        self, entity: etree._Element, endpoint_policy: str = ENDPOINT_POLICY_BINDING
+    ) -> ServiceProviderMetadata:
         """Parse one EntityDescriptor node into ServiceProviderMetadata."""
         snap = build_sp_snapshot(entity)
+        snap["endpoint_policy"] = endpoint_policy
         runtime = build_sp_runtime_from_snapshot(snap)
 
         if not runtime.get("acs_url"):
-            raise ValueError(
-                "Metadata has no AssertionConsumerService with a supported binding"
-            )
+            raise ValueError("Metadata has no AssertionConsumerService with a supported binding")
 
         signing_pems = self.get_keydescriptor_cert_pems(entity, use="signing")
         unspecified_pems = self.get_keydescriptor_cert_pems(entity, use=None)
@@ -590,7 +603,7 @@ class ServiceProviderMetadataParser:
         than aborting the whole walk; document-level errors still propagate."""
         for entity in mx.iter_sp_entity_descriptors(raw_xml):
             try:
-                yield self._parse_entity(entity)
+                yield self._parse_entity(entity, ENDPOINT_POLICY_IS_DEFAULT)
             except ValueError as exc:
                 LOGGER.warning(
                     "Skipping SP entity that cannot be parsed",
@@ -675,9 +688,12 @@ class IdentityProviderMetadataParser:
             out.append(item)
         return out
 
-    def _parse_entity(self, entity: etree._Element) -> IdentityProviderMetadata:
+    def _parse_entity(
+        self, entity: etree._Element, endpoint_policy: str = ENDPOINT_POLICY_BINDING
+    ) -> IdentityProviderMetadata:
         """Parse one EntityDescriptor node into IdentityProviderMetadata."""
         snap = build_idp_snapshot(entity)
+        snap["endpoint_policy"] = endpoint_policy
         runtime = build_idp_runtime_from_snapshot(snap)
         display_name = _pick_display_name(
             mx.extract_entity_display_names(entity),
@@ -729,7 +745,7 @@ class IdentityProviderMetadataParser:
         than aborting the whole walk; document-level errors still propagate."""
         for entity in mx.iter_idp_entity_descriptors(raw_xml):
             try:
-                yield self._parse_entity(entity)
+                yield self._parse_entity(entity, ENDPOINT_POLICY_IS_DEFAULT)
             except ValueError as exc:
                 LOGGER.warning(
                     "Skipping IdP entity that cannot be parsed",

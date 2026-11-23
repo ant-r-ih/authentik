@@ -103,9 +103,7 @@ def _extract_all_candidates(desc: etree._Element, element_xpath: str) -> list[di
         binding = normalize_binding_uri_to_token(binding_uri)
         index = int(n.attrib.get("index", 0))
         is_default = (n.attrib.get("isDefault") or "").strip().lower() == "true"
-        results.append(
-            {"url": url, "binding": binding, "index": index, "is_default": is_default}
-        )
+        results.append({"url": url, "binding": binding, "index": index, "is_default": is_default})
     results.sort(key=lambda x: x["index"])
     return results
 
@@ -204,8 +202,13 @@ def pick_preferred_service(
     *,
     allowed_bindings: set[str],
     prefer_order: tuple[str, ...],
+    default_first: bool = True,
 ) -> dict[str, str] | None:
-    """Pick a single endpoint from extracted candidates using allow+prefer policy."""
+    """Pick a single endpoint from extracted candidates using allow+prefer policy.
+
+    With `default_first`, an endpoint marked isDefault wins over the binding order (aggregate
+    metadata, where the publisher marks the endpoints it wants used). Otherwise the binding
+    order wins, and isDefault only breaks ties within a binding (single-entity metadata)."""
     if not isinstance(services, list):
         return None
 
@@ -226,6 +229,13 @@ def pick_preferred_service(
 
     def _clean(s: dict[str, Any]) -> dict[str, str]:
         return {"binding": s["binding"], "url": s["url"]}
+
+    if not default_first:
+        for b in prefer_order:
+            matches = [s for s in norm if s["binding"] == b]
+            if matches:
+                return _clean(sorted(matches, key=lambda s: not s["is_default"])[0])
+        return _clean(norm[0])
 
     # An endpoint explicitly marked isDefault (IndexedEndpointType) wins over
     # document/index order; fall back to the full set otherwise.

@@ -154,9 +154,7 @@ class TestServiceProviderMetadataParser(TestCase):
         metadata = lxml_from_string(MetadataProcessor(provider, request).build_entity_descriptor())
 
         schema = etree.XMLSchema(
-            etree.parse(
-                source="schemas/saml-schema-metadata-2.0.xsd", parser=etree.XMLParser()
-            )  # nosec
+            etree.parse(source="schemas/saml-schema-metadata-2.0.xsd", parser=etree.XMLParser())  # nosec
         )
         self.assertTrue(schema.validate(metadata))
 
@@ -702,3 +700,45 @@ class TestServiceProviderMetadataParserMultiCert(TestCase):
 
         self.assertEqual([b.order for b in v], list(range(len(v))))
         self.assertEqual([b.order for b in e], list(range(len(e))))
+
+
+class TestEndpointPolicy(TestCase):
+    """Single-entity metadata follows the binding order, aggregate metadata prefers isDefault
+    for the SSO and SLS endpoints. The ACS keeps the binding order on both paths."""
+
+    @staticmethod
+    def _sp_xml(entity_id: str = "https://sp.example.org/metadata") -> str:
+        return f"""<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+    entityID="{entity_id}">
+  <md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:AssertionConsumerService
+      Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+      Location="https://sp.example.org/acs-redirect" isDefault="true" index="1"/>
+    <md:AssertionConsumerService
+      Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+      Location="https://sp.example.org/acs-post" index="2"/>
+    <md:SingleLogoutService
+      Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+      Location="https://sp.example.org/slo-redirect" isDefault="true" index="1"/>
+    <md:SingleLogoutService
+      Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+      Location="https://sp.example.org/slo-post" index="2"/>
+  </md:SPSSODescriptor>
+</md:EntityDescriptor>"""
+
+    def test_single_entity_prefers_binding_order(self):
+        """Test a single metadata document picks POST over an isDefault Redirect endpoint"""
+        metadata = ServiceProviderMetadataParser().parse(self._sp_xml())
+        self.assertEqual(metadata.acs_binding, SAMLBindings.POST)
+        self.assertEqual(metadata.acs_location, "https://sp.example.org/acs-post")
+        self.assertEqual(metadata.sls_binding, SAMLBindings.POST)
+        self.assertEqual(metadata.sls_location, "https://sp.example.org/slo-post")
+
+    def test_aggregate_prefers_is_default(self):
+        """Test aggregate metadata picks the isDefault Redirect SLS, but keeps the POST ACS"""
+        entities = list(ServiceProviderMetadataParser().iter_entities(self._sp_xml()))
+        self.assertEqual(len(entities), 1)
+        self.assertEqual(entities[0].acs_binding, SAMLBindings.POST)
+        self.assertEqual(entities[0].acs_location, "https://sp.example.org/acs-post")
+        self.assertEqual(entities[0].sls_binding, SAMLBindings.REDIRECT)
+        self.assertEqual(entities[0].sls_location, "https://sp.example.org/slo-redirect")
