@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("authentik_crypto", "0007_certificatekeypairring_certificatekeypairringbinding_and_more"),
-        ("authentik_providers_saml", "0026_samlprovider_encryption_kp_ring_and_more"),
+        ("authentik_providers_saml", "0027_samlprovider_encryption_kp_ring_and_more"),
         ("authentik_sources_saml", "0027_samlsource_encryption_kp_ring_and_more"),
     ]
 

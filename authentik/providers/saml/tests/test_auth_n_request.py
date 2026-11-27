@@ -1,5 +1,6 @@
 """Test AuthN Request generator and parser"""
 
+import tracemalloc
 from base64 import b64encode
 from json import loads
 from urllib.parse import parse_qs, urlparse
@@ -921,3 +922,21 @@ class TestAuthNRequest(TestCase):
 
         response = AssertionProcessor(self.provider, http_request, parsed_request).build_response()
         self.assertIn(f'Destination="{resolved_acs}"', response)
+
+    def test_redirect_over_size_limit(self):
+        """Test that a redirect-binding request that inflates beyond the size limit is refused"""
+        request = deflate_and_base64_encode(
+            '<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" '
+            'ID="_1" Version="2.0" IssueInstant="2026-05-19T01:01:53.461Z" '
+            'AssertionConsumerServiceURL="http://testserver/source/saml/provider/acs/"/>'
+            + " "
+            * (32 * 1024 * 1024)
+        )
+
+        tracemalloc.start()
+        self.addCleanup(tracemalloc.stop)
+        with self.assertRaises(CannotHandleAssertion):
+            AuthNRequestParser(self.provider).parse_detached(request, None)
+        _, peak = tracemalloc.get_traced_memory()
+
+        self.assertLess(peak, 32 * 1024 * 1024)

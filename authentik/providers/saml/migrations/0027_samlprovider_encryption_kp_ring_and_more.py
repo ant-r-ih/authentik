@@ -8,7 +8,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("authentik_crypto", "0007_certificatekeypairring_certificatekeypairringbinding_and_more"),
-        ("authentik_providers_saml", "0025_samlprovider_ignore_force_authn"),
+        ("authentik_providers_saml", "0026_samlsession_authentik_p_expires_e2c90e_idx_and_more"),
     ]
 
     operations = [
