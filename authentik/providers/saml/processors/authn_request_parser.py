@@ -8,6 +8,7 @@ from xml.etree.ElementTree import ParseError  # nosec
 
 import xmlsec
 from defusedxml import ElementTree
+from django.utils.translation import gettext as _
 from structlog.stdlib import get_logger
 
 from authentik.common.saml.constants import (
@@ -22,7 +23,7 @@ from authentik.common.saml.constants import (
     SAML_BINDING_REDIRECT,
     SAML_NAME_ID_FORMAT_UNSPECIFIED,
 )
-from authentik.common.saml.exceptions import CannotHandleAssertion
+from authentik.common.saml.exceptions import ERROR_ACS_URL_MISMATCH, CannotHandleAssertion
 from authentik.crypto.keyring import candidate_cert_pems
 from authentik.lib.xml import UnsafeXML, lxml_from_string
 from authentik.providers.saml.models import SAMLBindings, SAMLProvider
@@ -76,9 +77,29 @@ class AuthNRequestParser:
 
     def _resolve_request(self, root) -> tuple[str | None, object | None, object, object]:
         """Resolve issuer, target SP, and effective runtime config for one request."""
+        # `ID` is a required attribute of every SAML request (SAML 2.0 core §3.2.1)
+        if "ID" not in root.attrib:
+            raise CannotHandleAssertion(
+                ERROR_CANNOT_DECODE_REQUEST, detail="Request is missing the ID attribute"
+            )
         issuer = peek_issuer(root)
         sp = self.provider.get_sp(issuer)
         request_acs_url = root.attrib.get("AssertionConsumerServiceURL")
+        configured_acs_url = sp.acs_url if sp is not None else self.provider.acs_url
+        # A request may only name the ACS we have configured; the response is sent there
+        if request_acs_url and request_acs_url.lower() != (configured_acs_url or "").lower():
+            self.logger.warning(
+                "ACS URL of request doesn't match configured ACS URL",
+                request_acs_url=request_acs_url,
+                configured_acs_url=configured_acs_url,
+            )
+            raise CannotHandleAssertion(
+                ERROR_ACS_URL_MISMATCH,
+                detail=_(
+                    "ACS URL of {request_acs_url} doesn't match Provider "
+                    "ACS URL of {provider_acs_url}."
+                ).format(request_acs_url=request_acs_url, provider_acs_url=configured_acs_url),
+            )
         request_sp_binding = self._normalize_binding(root.attrib.get("ProtocolBinding"))
         target = resolve_request_target(
             self.provider,
@@ -110,13 +131,24 @@ class AuthNRequestParser:
             )
         return auth_n_request
 
+    def _parse_document(self, decoded_xml: bytes):
+        """Parse the request XML, refusing a DOCTYPE declaration"""
+        try:
+            lxml_from_string(decoded_xml)
+        except UnsafeXML as exc:
+            raise CannotHandleAssertion(ERROR_CANNOT_DECODE_REQUEST, detail=exc) from exc
+        try:
+            return ElementTree.fromstring(decoded_xml)
+        except (ParseError, ValueError) as exc:
+            raise CannotHandleAssertion(ERROR_CANNOT_DECODE_REQUEST, detail=exc) from exc
+
     def parse(self, saml_request: str, relay_state: str | None = None) -> AuthNRequest:
         """Validate and parse raw request with enveloped signautre."""
         try:
             decoded_xml = b64decode(saml_request.encode())
-            root = ElementTree.fromstring(decoded_xml)
-        except (BinasciiError, ParseError, ValueError):
-            raise CannotHandleAssertion(ERROR_CANNOT_DECODE_REQUEST) from None
+        except (BinasciiError, ValueError) as exc:
+            raise CannotHandleAssertion(ERROR_CANNOT_DECODE_REQUEST, detail=exc) from None
+        root = self._parse_document(decoded_xml)
 
         resolved = self._resolve_request(root)
         _issuer, _sp, _target, cfg = resolved
@@ -170,9 +202,9 @@ class AuthNRequestParser:
         """Validate and parse raw request with detached signature"""
         try:
             decoded_xml = decode_base64_and_inflate(saml_request)
-            root = ElementTree.fromstring(decoded_xml)
-        except (BinasciiError, ParseError, UnicodeDecodeError, ValueError):
-            raise CannotHandleAssertion(ERROR_CANNOT_DECODE_REQUEST) from None
+        except (BinasciiError, UnicodeDecodeError, ValueError) as exc:
+            raise CannotHandleAssertion(ERROR_CANNOT_DECODE_REQUEST, detail=exc) from None
+        root = self._parse_document(decoded_xml)
 
         resolved = self._resolve_request(root)
         _issuer, _sp, _target, cfg = resolved
