@@ -1,6 +1,9 @@
 """Per-SP property mapping override: which attributes each SP receives in its assertion"""
 
+import json
+
 from django.test import TestCase
+from django.urls import reverse
 
 from authentik.common.saml.constants import NS_SAML_ASSERTION
 from authentik.core.tests.utils import RequestFactory, create_test_admin_user, create_test_flow
@@ -110,3 +113,73 @@ class TestSPPropertyMappings(TestCase):
             self._assertion_attributes(other),
             {PROVIDER_ATTRIBUTE: ["from-provider"]},
         )
+
+
+class TestSPPropertyMappingsAPI(TestCase):
+    """Saving an SP entry with the property mappings override on needs at least one mapping"""
+
+    def setUp(self):
+        self.client.force_login(create_test_admin_user())
+        self.provider = SAMLProvider.objects.create(
+            name=generate_id(),
+            authorization_flow=create_test_flow(),
+            acs_url=ACS_URL,
+        )
+        self.mapping = SAMLPropertyMapping.objects.create(
+            name=generate_id(),
+            saml_name=SP_ATTRIBUTE,
+            expression="return 'from-sp'",
+        )
+        self.sp = SAMLSP.objects.create(
+            parent=self.provider,
+            entity_id="https://sp.example.org/metadata",
+            acs_url=ACS_URL,
+            enabled=True,
+        )
+
+    def _patch(self, data: dict):
+        return self.client.patch(
+            reverse(
+                "authentik_api:samlprovider-service-provider",
+                kwargs={"pk": self.provider.pk, "sp_id": self.sp.pk},
+            ),
+            data=json.dumps(data),
+            content_type="application/json",
+        )
+
+    def test_override_on_without_mappings_rejected(self):
+        """Test turning the override on with no mappings is rejected and nothing is saved"""
+        response = self._patch({"property_mappings_override": True, "property_mappings": []})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("property_mappings", response.json())
+        self.sp.refresh_from_db()
+        self.assertFalse(self.sp.property_mappings_override)
+
+    def test_override_on_without_mappings_rejected_on_flag_only(self):
+        """Test turning the override on without sending mappings is rejected too"""
+        response = self._patch({"property_mappings_override": True})
+        self.assertEqual(response.status_code, 400)
+        self.sp.refresh_from_db()
+        self.assertFalse(self.sp.property_mappings_override)
+
+    def test_override_on_with_mappings_saved(self):
+        """Test turning the override on with a mapping is saved"""
+        response = self._patch(
+            {"property_mappings_override": True, "property_mappings": [str(self.mapping.pk)]}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.sp.refresh_from_db()
+        self.assertTrue(self.sp.property_mappings_override)
+        self.assertEqual(list(self.sp.property_mappings.all()), [self.mapping])
+
+    def test_override_off_without_mappings_saved(self):
+        """Test turning the override off needs no mappings"""
+        response = self._patch({"property_mappings_override": False, "property_mappings": []})
+        self.assertEqual(response.status_code, 200)
+
+    def test_unrelated_edit_not_blocked_by_earlier_empty_override(self):
+        """Test editing another field of an entry that already has an empty override is allowed"""
+        self.sp.property_mappings_override = True
+        self.sp.save()
+        response = self._patch({"name": "renamed"})
+        self.assertEqual(response.status_code, 200)

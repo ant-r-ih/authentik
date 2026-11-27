@@ -418,6 +418,33 @@ class SAMLSPSerializer(ModelSerializer):
             "last_updated",
         ]
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        # Only check when this write touches the override or its mappings, so unrelated edits
+        # of an entry aren't blocked by an earlier invalid state
+        if "property_mappings_override" not in attrs and "property_mappings" not in attrs:
+            return attrs
+        override = attrs.get(
+            "property_mappings_override",
+            getattr(self.instance, "property_mappings_override", False),
+        )
+        if "property_mappings" in attrs:
+            mappings = attrs["property_mappings"]
+        elif self.instance is not None:
+            mappings = list(self.instance.property_mappings.all())
+        else:
+            mappings = []
+        if override and not mappings:
+            raise ValidationError(
+                {
+                    "property_mappings": _(
+                        "Select at least one property mapping when the property mappings "
+                        "override is enabled."
+                    )
+                }
+            )
+        return attrs
+
 
 class SAMLSPDTOSerializer(PassiveSerializer):
     """Serializer for SP DTO payloads used by preview/apply."""

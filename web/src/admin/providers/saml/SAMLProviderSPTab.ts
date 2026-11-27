@@ -1766,6 +1766,10 @@ export class SAMLProviderSPTab extends AKElement {
                 @change=${(event: Event) => {
                     const target = event.target as HTMLInputElement;
                     this.editPropertyMappingsOverride = target.checked;
+                    // Start from the parent provider's mappings, so the override isn't saved empty
+                    if (target.checked && this.editPropertyMappings.length === 0) {
+                        this.editPropertyMappings = [...(this.parent?.propertyMappings ?? [])];
+                    }
                 }}
             ></ak-switch-input>
             ${
